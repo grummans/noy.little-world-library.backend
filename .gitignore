@@ -1,0 +1,10 @@
+# Never commit real credentials.
+.env
+*.env
+!.env.example
+
+# Local build output
+/bin/
+/api
+/migrate
+*.exe
