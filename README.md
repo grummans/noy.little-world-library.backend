@@ -11,6 +11,7 @@ Postgres 16 và MinIO chạy trên server `.48`. Tạo `.env` từ `.env.example
 set -a; while IFS='=' read -r k v; do case "$k" in ''|\#*) continue;; esac; export "$k=$v"; done < .env; set +a
 
 go run ./cmd/migrate up        # up | down | reset | status
+go run ./cmd/seed              # dữ liệu demo: teacher/parent, 5 sách, 2 gói
 go run ./cmd/api               # http://localhost:8080/healthz
 go test ./...                  # test DB cần DATABASE_URL, thiếu thì skip
 ```

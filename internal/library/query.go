@@ -9,9 +9,10 @@ const bundleBookCount = `(SELECT count(*) FROM bundle_books bb2
 	WHERE bb2.bundle_id = bu.id AND cb.status = 'published'
 	  AND cb.access_type = 'paid' AND cb.price_vnd > 0)`
 
-const bundleTags = `COALESCE((SELECT array_agg(t.slug ORDER BY t.slug)
-	FROM bundle_tags bt JOIN tags t ON t.id = bt.tag_id
-	WHERE bt.bundle_id = bu.id), '{}')`
+const bundleTags = `COALESCE((SELECT array_agg(DISTINCT t.slug ORDER BY t.slug)
+	FROM bundle_books bb JOIN book_tags bt ON bt.book_id = bb.book_id
+	JOIN tags t ON t.id = bt.tag_id
+	WHERE bb.bundle_id = bu.id), '{}')`
 
 const bookTags = `COALESCE((SELECT array_agg(t.slug ORDER BY t.slug)
 	FROM book_tags bt JOIN tags t ON t.id = bt.tag_id

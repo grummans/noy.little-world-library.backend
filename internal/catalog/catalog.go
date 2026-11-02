@@ -203,7 +203,6 @@ func (s *Service) bundleBooks(ctx context.Context, bundleID int64) ([]Card, erro
 	return books, nil
 }
 
-// so a failed signature simply leaves the URL empty and the client shows a placeholder.
 // AttachCovers fills CoverURL on cards; other packages reuse it for their own lists.
 func (s *Service) AttachCovers(ctx context.Context, cards []Card) {
 	if s.presigner == nil {

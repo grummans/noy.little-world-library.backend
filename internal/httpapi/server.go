@@ -85,6 +85,7 @@ func (s *Server) Router() http.Handler {
 
 	mux.HandleFunc("GET /api/parent/library", s.requireRole(auth.RoleParent, s.handleParentLibrary))
 
+	mux.HandleFunc("GET /api/orders", s.requireRole(auth.RoleParent, s.handleListOrders))
 	mux.HandleFunc("POST /api/orders", s.requireRole(auth.RoleParent, s.handleCreateOrder))
 	mux.HandleFunc("GET /api/orders/{txnRef}", s.requireRole(auth.RoleParent, s.handleGetOrder))
 	mux.HandleFunc("GET /api/payments/vnpay/return", s.handleVnpayReturn)

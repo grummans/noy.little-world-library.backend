@@ -43,17 +43,19 @@ WITH items AS (
 	         JOIN books cb ON cb.id = bb.book_id
 	        WHERE bb.bundle_id = bu.id AND cb.status = 'published'
 	          AND cb.access_type = 'paid' AND cb.price_vnd > 0),
-	       COALESCE((SELECT array_agg(t.slug ORDER BY t.slug)
-	                 FROM bundle_tags bt JOIN tags t ON t.id = bt.tag_id
-	                 WHERE bt.bundle_id = bu.id), '{}')
+	       COALESCE((SELECT array_agg(DISTINCT t.slug ORDER BY t.slug)
+	                 FROM bundle_books bb JOIN book_tags bt ON bt.book_id = bb.book_id
+	                 JOIN tags t ON t.id = bt.tag_id
+	                 WHERE bb.bundle_id = bu.id), '{}')
 	FROM bundles bu
 	WHERE bu.status = 'published'
 	  AND ($1 = 'all' OR $1 = 'bundle')
 	  AND ($3 = '' OR bu.title ILIKE '%' || $3 || '%' ESCAPE '\'
 	       OR ($2 <> '' AND bu.slug LIKE '%' || $2 || '%' ESCAPE '\'))
 	  AND ($4 = '' OR EXISTS (
-	        SELECT 1 FROM bundle_tags bt2 JOIN tags t2 ON t2.id = bt2.tag_id
-	        WHERE bt2.bundle_id = bu.id AND t2.slug = $4))
+	        SELECT 1 FROM bundle_books bb2 JOIN book_tags bt2 ON bt2.book_id = bb2.book_id
+	        JOIN tags t2 ON t2.id = bt2.tag_id
+	        WHERE bb2.bundle_id = bu.id AND t2.slug = $4))
 	  -- Bundles carry no age range, so an age filter hides them.
 	  AND $5::smallint IS NULL
 )

@@ -21,6 +21,9 @@ type orderResponse struct {
 	PaymentURL    string     `json:"payment_url,omitempty"`
 	ResponseCode  *string    `json:"response_code,omitempty"`
 	TransactionNo *string    `json:"transaction_no,omitempty"`
+	ItemTitle     string     `json:"item_title,omitempty"`
+	ItemSlug      string     `json:"item_slug,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 func newOrderResponse(order orders.Order) orderResponse {
@@ -34,6 +37,9 @@ func newOrderResponse(order orders.Order) orderResponse {
 		PaidAt:        order.PaidAt,
 		ResponseCode:  order.ResponseCode,
 		TransactionNo: order.TransactionNo,
+		ItemTitle:     order.ItemTitle,
+		ItemSlug:      order.ItemSlug,
+		CreatedAt:     order.CreatedAt,
 	}
 }
 
@@ -73,6 +79,24 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/orders/{txnRef} — the buyer polls their own order after returning from VNPay.
+func (s *Server) handleListOrders(w http.ResponseWriter, r *http.Request) {
+	user, _ := userFrom(r)
+
+	list, err := s.Orders.ListByBuyer(r.Context(), user.ID)
+	if err != nil {
+		s.Log.Error("list orders", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "Could not load orders.")
+		return
+	}
+
+	resp := make([]orderResponse, 0, len(list))
+	for _, order := range list {
+		resp = append(resp, newOrderResponse(order))
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) handleGetOrder(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r)
 

@@ -85,11 +85,18 @@ func (s *Service) applyResult(ctx context.Context, orderID int64, status string,
 		txnNo = nilIfEmpty(result.TransactionNo)
 	}
 
+	// A success can arrive after a cancel/fail for the same order (two tabs, a retry):
+	// the money did move, so success must win. A failure only applies while pending.
+	guard := "AND status = 'pending'"
+	if status == StatusPaid {
+		guard = "AND status <> 'paid'"
+	}
+
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE orders
 		 SET status = $1, vnpay_response_code = $2, vnpay_transaction_no = $3,
 		     paid_at = CASE WHEN $1 = 'paid' THEN $4 ELSE paid_at END
-		 WHERE id = $5 AND status = 'pending'`,
+		 WHERE id = $5 `+guard,
 		status, result.ResponseCode, txnNo, paidAt, orderID,
 	)
 	if err != nil {
@@ -108,8 +115,9 @@ func (s *Service) applyResult(ctx context.Context, orderID int64, status string,
 	return affected > 0, nil
 }
 
-// ReturnState is what the return page shows. It never grants access; at most it reports
-// that a verified IPN already did.
+// ReturnState is what the return page shows. The return URL is signed by VNPay too, so a
+// verified success is applied here as well: IPN is the primary path, but a merchant whose
+// IPN URL is misconfigured must not leave paying customers without what they bought.
 type ReturnState struct {
 	Status  string // paid | verifying | failed | cancelled | invalid
 	Code    string
@@ -126,6 +134,17 @@ func (s *Service) ReturnState(ctx context.Context, query url.Values) ReturnState
 	order, err := s.byTxnRef(ctx, result.TxnRef)
 	if err != nil {
 		return ReturnState{Status: "invalid", Message: "Không tìm thấy đơn hàng."}
+	}
+
+	// A verified success settles the order even if the IPN never arrives. applyResult is
+	// idempotent, so the IPN landing later is still a no-op.
+	if result.Confirmed && order.Status != StatusPaid {
+		if _, err := s.applyResult(ctx, order.ID, StatusPaid, result); err != nil {
+			return ReturnState{Status: "verifying", Message: "Đang xác nhận thanh toán...", TxnRef: order.TxnRef}
+		}
+		if updated, err := s.byTxnRef(ctx, result.TxnRef); err == nil {
+			order = updated
+		}
 	}
 
 	state := ReturnState{Code: result.ResponseCode, TxnRef: order.TxnRef}
@@ -234,4 +253,40 @@ func nilIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+// ListByBuyer returns a buyer's own orders, newest first: the parent needs to see what
+// happened to a payment when the browser never came back.
+func (s *Service) ListByBuyer(ctx context.Context, buyerID int64) ([]Order, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT o.id, o.buyer_id, o.book_id, o.bundle_id, o.amount_vnd, o.status,
+		        o.vnpay_txn_ref, o.vnpay_transaction_no, o.vnpay_response_code,
+		        o.paid_at, o.created_at,
+		        coalesce(b.title, bu.title, ''),
+		        coalesce(b.slug, bu.slug, '')
+		 FROM orders o
+		 LEFT JOIN books b ON b.id = o.book_id
+		 LEFT JOIN bundles bu ON bu.id = o.bundle_id
+		 WHERE o.buyer_id = $1
+		 ORDER BY o.id DESC
+		 LIMIT 50`, buyerID)
+	if err != nil {
+		return nil, fmt.Errorf("list orders: %w", err)
+	}
+	defer rows.Close()
+
+	list := []Order{}
+	for rows.Next() {
+		var order Order
+		if err := rows.Scan(&order.ID, &order.BuyerID, &order.BookID, &order.BundleID,
+			&order.AmountVND, &order.Status, &order.TxnRef, &order.TransactionNo,
+			&order.ResponseCode, &order.PaidAt, &order.CreatedAt, &order.ItemTitle, &order.ItemSlug); err != nil {
+			return nil, fmt.Errorf("scan order: %w", err)
+		}
+		list = append(list, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list orders: %w", err)
+	}
+	return list, nil
 }

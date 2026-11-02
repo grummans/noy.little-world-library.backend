@@ -167,7 +167,9 @@ func TestGetOrderIsOwnerOnly(t *testing.T) {
 	}
 }
 
-func TestReturnStateIsVerifyingBeforeIPN(t *testing.T) {
+// The return URL is signed by VNPay too, so a verified success settles the order even
+// when the IPN never arrives (a merchant whose IPN URL is wrong still gets paid orders).
+func TestReturnStateAppliesVerifiedSuccess(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	owner := teacher(t, f.db)
@@ -180,8 +182,16 @@ func TestReturnStateIsVerifyingBeforeIPN(t *testing.T) {
 
 	// The return query is exactly what VNPay redirects with (signed).
 	state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, checkout.Order.TxnRef, 5000, "00", "00"))
-	if state.Status != "verifying" {
-		t.Errorf("status = %q, want verifying (IPN has not arrived)", state.Status)
+	if state.Status != "paid" {
+		t.Errorf("status = %q, want paid", state.Status)
+	}
+
+	order, err := f.svc.Get(ctx, f.parent, checkout.Order.TxnRef)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	if order.Status != "paid" || order.PaidAt == nil {
+		t.Errorf("order after return = %+v, want paid with paid_at", order)
 	}
 
 	// A forged callback is rejected without touching the order.

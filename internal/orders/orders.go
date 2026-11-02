@@ -32,6 +32,9 @@ const (
 	RspUnknownError    = "99"
 	codeCancelled      = "24"
 	paymentExpireAfter = 15 * time.Minute
+	// A pending order is reusable only for the few seconds a double click can span: after
+	// that its txn_ref already reached VNPay, which rejects the same reference again.
+	reusablePendingWindow = 60 * time.Second
 )
 
 var (
@@ -69,6 +72,10 @@ type Order struct {
 	ResponseCode  *string
 	PaidAt        *time.Time
 	CreatedAt     time.Time
+	// ItemTitle and ItemSlug are filled by ListByBuyer for display; they are joins,
+	// not columns on the order row.
+	ItemTitle string
+	ItemSlug  string
 }
 
 // Checkout is what the browser needs to continue to VNPay.
@@ -242,9 +249,10 @@ func (s *Service) ownedAlready(ctx context.Context, buyerID int64, item item) (b
 	return owned, nil
 }
 
-// pendingOrder returns a still-reusable pending order. Anything older than the VNPay
-// window is cancelled first: it can no longer be paid, and reusing it would keep signing
-// links for an order whose price may already be stale.
+// pendingOrder returns a still-reusable pending order. Anything older than
+// reusablePendingWindow is cancelled first: its txn_ref was already sent to VNPay, and
+// VNPay refuses a repeated reference ("Invalid data format", code 03), so a retry needs a
+// new order rather than the same link again.
 func (s *Service) pendingOrder(ctx context.Context, buyerID int64, item item) (Order, bool, error) {
 	var order Order
 	err := s.db.QueryRowContext(ctx,
@@ -264,7 +272,7 @@ func (s *Service) pendingOrder(ctx context.Context, buyerID int64, item item) (O
 		return Order{}, false, err
 	}
 
-	if s.now().Sub(order.CreatedAt) > paymentExpireAfter {
+	if s.now().Sub(order.CreatedAt) > reusablePendingWindow {
 		if _, err := s.db.ExecContext(ctx,
 			`UPDATE orders SET status = 'cancelled' WHERE id = $1 AND status = 'pending'`,
 			order.ID,
@@ -279,9 +287,11 @@ func (s *Service) pendingOrder(ctx context.Context, buyerID int64, item item) (O
 // signPayment builds the VNPay URL for one txn_ref and amount.
 func (s *Service) signPayment(txnRef string, item item, returnURL, clientIP string, created time.Time) (string, error) {
 	url, err := s.gateway.BuildURL(vnpay.PaymentRequest{
-		TxnRef:      txnRef,
-		AmountVND:   item.amountVND,
-		OrderInfo:   "Thanh toan " + vnpay.SanitizeText(item.title),
+		TxnRef:    txnRef,
+		AmountVND: item.amountVND,
+		// The reference is part of the order info so two attempts for the same product are
+		// never identical: VNPay rejects a repeated order description (code 03).
+		OrderInfo:   vnpay.SanitizeText("Thanh toan " + item.title + " " + txnRef),
 		ReturnURL:   returnURL,
 		ClientIP:    clientIP,
 		CreateDate:  created,

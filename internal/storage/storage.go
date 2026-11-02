@@ -318,3 +318,24 @@ func (c *Client) Stat(ctx context.Context, key string) (int64, error) {
 	}
 	return info.Size, nil
 }
+
+// DeletePrefix removes every object under a key prefix. An empty prefix empties the whole
+// bucket, which is what the seed tool uses to start from a clean media store.
+func (c *Client) DeletePrefix(ctx context.Context, prefix string) error {
+	objects := c.internal.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	})
+
+	var errs []error
+	for object := range objects {
+		if object.Err != nil {
+			errs = append(errs, object.Err)
+			continue
+		}
+		if err := c.Delete(ctx, object.Key); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
