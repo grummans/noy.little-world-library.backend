@@ -139,6 +139,7 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           scanners: vuln
+          limit-severities-for-sarif: true
           format: sarif
           output: trivy-image.sarif
           exit-code: '1'
