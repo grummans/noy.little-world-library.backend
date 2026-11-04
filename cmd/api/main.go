@@ -22,6 +22,7 @@ import (
 	"littleworld/internal/library"
 	"littleworld/internal/orders"
 	"littleworld/internal/reading"
+	"littleworld/internal/sales"
 	"littleworld/internal/storage"
 	"littleworld/internal/vnpay"
 )
@@ -84,6 +85,7 @@ func run() error {
 			Reading:        reading.New(pool, presigner),
 			Library:        library.New(pool, catalogService),
 			Orders:         orders.New(pool, vnpay.New(cfg.Vnpay)),
+			Sales:          sales.New(pool),
 			SecureCookies:  cfg.AppEnv != "dev",
 			VnpayReturnURL: cfg.VnpayReturnURL,
 		}).Router(),

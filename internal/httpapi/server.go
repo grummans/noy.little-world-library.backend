@@ -19,6 +19,7 @@ import (
 	"littleworld/internal/library"
 	"littleworld/internal/orders"
 	"littleworld/internal/reading"
+	"littleworld/internal/sales"
 	"littleworld/internal/storage"
 )
 
@@ -31,6 +32,7 @@ type Deps struct {
 	Reading *reading.Service
 	Library *library.Service
 	Orders  *orders.Service
+	Sales   *sales.Service
 	Log     *slog.Logger
 	// Storage is nil when S3 settings are absent; upload endpoints must check.
 	Storage *storage.Client
@@ -93,6 +95,7 @@ func (s *Server) Router() http.Handler {
 
 	mux.HandleFunc("POST /api/teacher/tags", s.requireRole(auth.RoleTeacher, s.handleCreateTag))
 	mux.HandleFunc("DELETE /api/teacher/tags/{id}", s.requireRole(auth.RoleTeacher, s.handleDeleteTag))
+	mux.HandleFunc("GET /api/teacher/sales", s.requireRole(auth.RoleTeacher, s.handleSales))
 
 	return s.checkOrigin(mux)
 }

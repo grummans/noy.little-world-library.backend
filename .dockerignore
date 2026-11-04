@@ -1,0 +1,13 @@
+# Never build local secrets into an image.
+.env
+*.env
+!.env.staging.example
+
+.git/
+.github/
+
+# Local build output
+/bin/
+/api
+/migrate
+*.exe
