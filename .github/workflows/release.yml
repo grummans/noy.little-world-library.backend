@@ -120,6 +120,17 @@ jobs:
           sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The table is readable in Actions logs; the SARIF scan below remains the release gate.
+      - name: Report image findings (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os,library
+          scanners: vuln
+          format: table
+          exit-code: '0'
       - name: Enforce image security policy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -127,6 +138,7 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           vuln-type: os,library
+          scanners: vuln
           format: sarif
           output: trivy-image.sarif
           exit-code: '1'
