@@ -25,7 +25,7 @@ func TestBuildURLIsSigned(t *testing.T) {
 		OrderInfo:  "Thanh toan sach",
 		ReturnURL:  "https://example.com/return",
 		ClientIP:   "203.0.113.7",
-		CreateDate: time.Date(2026, 11, 1, 10, 30, 0, 0, time.Local),
+		CreateDate: time.Date(2026, 11, 1, 10, 30, 0, 0, vnLocation),
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)

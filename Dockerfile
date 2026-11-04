@@ -17,7 +17,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api \
 # ---- Runtime stage ---------------------------------------------------------
 FROM alpine:3.23 AS runtime
 
+# Pinning apk packages would prevent Alpine's security updates; the base image is pinned to 3.23.
 # ca-certificates: VNPay and S3 over TLS. tzdata: readable log timestamps.
+# hadolint ignore=DL3018
 RUN apk add --no-cache ca-certificates tzdata \
  && adduser -D -u 10001 app
 
