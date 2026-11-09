@@ -50,10 +50,10 @@ func salesSince(rangeValue string, now time.Time) (*time.Time, bool) {
 	case "", "all":
 		return nil, true
 	case "30d":
-		since := now.AddDate(0, 0, -30)
+		since := sales.Cutoff(now, 30)
 		return &since, true
 	case "90d":
-		since := now.AddDate(0, 0, -90)
+		since := sales.Cutoff(now, 90)
 		return &since, true
 	default:
 		return nil, false
@@ -63,13 +63,16 @@ func salesSince(rangeValue string, now time.Time) (*time.Time, bool) {
 func (s *Server) handleSales(w http.ResponseWriter, r *http.Request) {
 	user, _ := userFrom(r)
 
-	since, ok := salesSince(r.URL.Query().Get("range"), time.Now())
+	// One clock for the whole request: the cut-off and the chart's week anchor must not come
+	// from two different clocks, or a report asked for at midnight covers the wrong days.
+	now := time.Now()
+	since, ok := salesSince(r.URL.Query().Get("range"), now)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid_range", "Khoảng thời gian không hợp lệ.")
 		return
 	}
 
-	summary, err := s.Sales.Summary(r.Context(), user.ID, since)
+	summary, err := s.Sales.Summary(r.Context(), user.ID, since, now)
 	if err != nil {
 		s.Log.Error("sales summary", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "Something went wrong.")

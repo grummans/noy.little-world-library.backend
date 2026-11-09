@@ -102,7 +102,7 @@ func TestSummaryBooksBundlesAndTotals(t *testing.T) {
 	insertOrder(t, pool, buyer, nil, bookID(bundle), 70000, "paid")
 	insertOrder(t, pool, buyer, bookID(notMine), nil, 40000, "paid")
 
-	summary, err := svc.Summary(t.Context(), teacher, nil)
+	summary, err := svc.Summary(t.Context(), teacher, nil, time.Now())
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestSummaryEmptyOwner(t *testing.T) {
 
 	lone := insertUser(t, pool, "sales-lone@example.com", "teacher")
 
-	summary, err := svc.Summary(t.Context(), lone, nil)
+	summary, err := svc.Summary(t.Context(), lone, nil, time.Now())
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestSummaryCountsEveryPaidOrderOnce(t *testing.T) {
 	// Mine through a bundle.
 	insertOrder(t, pool, buyer, nil, bundleRef, 60000, "paid")
 
-	summary, err := svc.Summary(t.Context(), teacher, nil)
+	summary, err := svc.Summary(t.Context(), teacher, nil, time.Now())
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
@@ -238,6 +238,72 @@ func insertPaidOrderDaysAgo(t *testing.T, db *sql.DB, buyerID, bookID int64, amo
 	}
 }
 
+// insertPaidOrderAt pins an order to an exact instant, for week-boundary and old-order cases.
+func insertPaidOrderAt(t *testing.T, db *sql.DB, buyerID, bookID int64, amount int64, at time.Time) {
+	t.Helper()
+	orderSeq++
+	if _, err := db.ExecContext(t.Context(),
+		`INSERT INTO orders (buyer_id, book_id, amount_vnd, status, vnpay_txn_ref, paid_at)
+		 VALUES ($1, $2, $3, 'paid', $4, $5)`,
+		buyerID, bookID, amount, "txn-sales-"+strconv.Itoa(orderSeq), at); err != nil {
+		t.Fatalf("insert dated order: %v", err)
+	}
+}
+
+// TestTrendIsTwelveVietnamWeeks pins the chart contract: exactly twelve buckets, weeks start
+// Monday in Vietnam time, empty weeks keep a zero bar, and a sale older than the window is in
+// the all-time totals but in none of the bars.
+func TestTrendIsTwelveVietnamWeeks(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	svc := sales.New(pool)
+
+	teacher := insertUser(t, pool, "sales-weeks@example.com", "teacher")
+	buyer := insertUser(t, pool, "sales-weeks-buyer@example.com", "parent")
+	book := insertBook(t, pool, teacher, "weeks-book", 50000)
+
+	// Vietnam is UTC+7, so 00:30 Monday here is still Sunday in UTC. A chart bucketed in UTC
+	// would file this sale under last week.
+	vn := time.FixedZone("ICT", 7*60*60)
+	now := time.Now().In(vn)
+	monday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, vn).
+		AddDate(0, 0, -((int(now.Weekday()) + 6) % 7))
+	insertPaidOrderAt(t, pool, buyer, book, 50000, monday.Add(30*time.Minute))
+	// Older than twelve weeks: real money, but not on a chart of the last twelve weeks.
+	insertPaidOrderAt(t, pool, buyer, book, 70000, monday.AddDate(0, 0, -7*14))
+
+	summary, err := svc.Summary(t.Context(), teacher, nil, time.Now())
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	if len(summary.Trend) != 12 {
+		t.Fatalf("trend = %d buckets, want 12", len(summary.Trend))
+	}
+	last := summary.Trend[len(summary.Trend)-1]
+	if last.WeekStart.Format("2006-01-02") != monday.Format("2006-01-02") {
+		t.Errorf("last bucket = %s, want this Monday %s",
+			last.WeekStart.Format("2006-01-02"), monday.Format("2006-01-02"))
+	}
+	if last.RevenueVND != 50000 {
+		t.Errorf("last bucket = %d, want the 00:30 Monday sale", last.RevenueVND)
+	}
+	if prev := summary.Trend[len(summary.Trend)-2]; prev.RevenueVND != 0 {
+		t.Errorf("empty week = %d, want a zero bar", prev.RevenueVND)
+	}
+
+	var trendTotal int64
+	for _, week := range summary.Trend {
+		trendTotal += week.RevenueVND
+	}
+	if trendTotal != 50000 {
+		t.Errorf("trend total = %d, want 50000: the 14-week-old sale is outside the chart",
+			trendTotal)
+	}
+	if summary.RevenueVND != 120000 {
+		t.Errorf("all-time revenue = %d, want 120000 from both sales", summary.RevenueVND)
+	}
+}
+
 func TestSummaryRespectsSince(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	svc := sales.New(pool)
@@ -249,7 +315,7 @@ func TestSummaryRespectsSince(t *testing.T) {
 	insertPaidOrderDaysAgo(t, pool, buyer, book, 30000, 1)
 	insertPaidOrderDaysAgo(t, pool, buyer, book, 30000, 60)
 
-	all, err := svc.Summary(t.Context(), teacher, nil)
+	all, err := svc.Summary(t.Context(), teacher, nil, time.Now())
 	if err != nil {
 		t.Fatalf("summary all time: %v", err)
 	}
@@ -258,7 +324,7 @@ func TestSummaryRespectsSince(t *testing.T) {
 	}
 
 	since := time.Now().AddDate(0, 0, -30)
-	recent, err := svc.Summary(t.Context(), teacher, &since)
+	recent, err := svc.Summary(t.Context(), teacher, &since, time.Now())
 	if err != nil {
 		t.Fatalf("summary last 30 days: %v", err)
 	}
@@ -291,7 +357,7 @@ func TestSummaryChartsTrendAndRecent(t *testing.T) {
 		t.Fatalf("insert pending order: %v", err)
 	}
 
-	summary, err := svc.Summary(t.Context(), teacher, nil)
+	summary, err := svc.Summary(t.Context(), teacher, nil, time.Now())
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}

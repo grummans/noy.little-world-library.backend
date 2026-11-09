@@ -24,7 +24,25 @@ jobs:
   quality:
     name: Go quality
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    # The DB-backed tests skip themselves without DATABASE_URL, which would make this job
+    # green while the SQL is never executed. The service below is what keeps them honest.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: little_world_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/little_world_test?sslmode=disable
     steps:
       - uses: actions/checkout@v7
         with:
