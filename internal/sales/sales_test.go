@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"littleworld/internal/dbtest"
 	"littleworld/internal/sales"
@@ -101,7 +102,7 @@ func TestSummaryBooksBundlesAndTotals(t *testing.T) {
 	insertOrder(t, pool, buyer, nil, bookID(bundle), 70000, "paid")
 	insertOrder(t, pool, buyer, bookID(notMine), nil, 40000, "paid")
 
-	summary, err := svc.Summary(t.Context(), teacher)
+	summary, err := svc.Summary(t.Context(), teacher, nil)
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestSummaryEmptyOwner(t *testing.T) {
 
 	lone := insertUser(t, pool, "sales-lone@example.com", "teacher")
 
-	summary, err := svc.Summary(t.Context(), lone)
+	summary, err := svc.Summary(t.Context(), lone, nil)
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestSummaryCountsEveryPaidOrderOnce(t *testing.T) {
 	// Mine through a bundle.
 	insertOrder(t, pool, buyer, nil, bundleRef, 60000, "paid")
 
-	summary, err := svc.Summary(t.Context(), teacher)
+	summary, err := svc.Summary(t.Context(), teacher, nil)
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
@@ -222,5 +223,107 @@ func TestSummaryCountsEveryPaidOrderOnce(t *testing.T) {
 	}
 	if summary.Books[0].Sold != 2 || summary.Books[0].RevenueVND != 80000 {
 		t.Errorf("book row = %+v, want 2 sold for 80000", summary.Books[0])
+	}
+}
+
+// insertPaidOrderDaysAgo dates a paid order, so a range can be tested without faking now().
+func insertPaidOrderDaysAgo(t *testing.T, db *sql.DB, buyerID, bookID int64, amount int64, daysAgo int) {
+	t.Helper()
+	orderSeq++
+	if _, err := db.ExecContext(t.Context(),
+		`INSERT INTO orders (buyer_id, book_id, amount_vnd, status, vnpay_txn_ref, paid_at)
+		 VALUES ($1, $2, $3, 'paid', $4, now() - make_interval(days => $5))`,
+		buyerID, bookID, amount, "txn-sales-"+strconv.Itoa(orderSeq), daysAgo); err != nil {
+		t.Fatalf("insert dated order: %v", err)
+	}
+}
+
+func TestSummaryRespectsSince(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	svc := sales.New(pool)
+
+	teacher := insertUser(t, pool, "sales-range@example.com", "teacher")
+	buyer := insertUser(t, pool, "sales-range-buyer@example.com", "parent")
+	book := insertBook(t, pool, teacher, "range-book", 30000)
+
+	insertPaidOrderDaysAgo(t, pool, buyer, book, 30000, 1)
+	insertPaidOrderDaysAgo(t, pool, buyer, book, 30000, 60)
+
+	all, err := svc.Summary(t.Context(), teacher, nil)
+	if err != nil {
+		t.Fatalf("summary all time: %v", err)
+	}
+	if all.Orders != 2 || all.RevenueVND != 60000 {
+		t.Errorf("all-time summary = %+v, want 2 orders and 60000", all)
+	}
+
+	since := time.Now().AddDate(0, 0, -30)
+	recent, err := svc.Summary(t.Context(), teacher, &since)
+	if err != nil {
+		t.Fatalf("summary last 30 days: %v", err)
+	}
+	// The 60-day-old sale belongs to a different period, so it must not inflate the total
+	// or the per-book row the range is supposed to describe.
+	if recent.Orders != 1 || recent.RevenueVND != 30000 {
+		t.Errorf("30-day summary = %+v, want 1 order and 30000", recent)
+	}
+	if len(recent.Books) != 1 || recent.Books[0].Sold != 1 {
+		t.Errorf("30-day book row = %+v, want sold 1", recent.Books)
+	}
+}
+
+func TestSummaryChartsTrendAndRecent(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	svc := sales.New(pool)
+
+	teacher := insertUser(t, pool, "sales-chart@example.com", "teacher")
+	other := insertUser(t, pool, "sales-chart-other@example.com", "teacher")
+	buyer := insertUser(t, pool, "sales-chart-buyer@example.com", "parent")
+	book := insertBook(t, pool, teacher, "chart-book", 50000)
+	foreignBook := insertBook(t, pool, other, "chart-foreign", 90000)
+
+	insertPaidOrderDaysAgo(t, pool, buyer, book, 50000, 0)
+	insertPaidOrderDaysAgo(t, pool, buyer, foreignBook, 90000, 0)
+	// A pending order is not a transaction yet.
+	if _, err := pool.ExecContext(t.Context(),
+		`INSERT INTO orders (buyer_id, book_id, amount_vnd, status, vnpay_txn_ref)
+		 VALUES ($1, $2, 50000, 'pending', 'txn-chart-pending')`, buyer, book); err != nil {
+		t.Fatalf("insert pending order: %v", err)
+	}
+
+	summary, err := svc.Summary(t.Context(), teacher, nil)
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	// The chart ends on the current week, and today's sale lands in that last bucket.
+	if len(summary.Trend) == 0 {
+		t.Fatal("trend is empty, want at least the current week")
+	}
+	last := summary.Trend[len(summary.Trend)-1]
+	if last.RevenueVND != 50000 {
+		t.Errorf("last week = %+v, want 50000 from today's sale", last)
+	}
+	var trendTotal int64
+	for _, week := range summary.Trend {
+		trendTotal += week.RevenueVND
+	}
+	if trendTotal != summary.RevenueVND {
+		t.Errorf("trend total = %d, want to match revenue %d", trendTotal, summary.RevenueVND)
+	}
+
+	// Another teacher's sale must never show up in my transaction list.
+	if len(summary.Recent) != 1 {
+		t.Fatalf("recent = %+v, want 1 paid order", summary.Recent)
+	}
+	if summary.Recent[0].Title != "Sách chart-book" || summary.Recent[0].AmountVND != 50000 {
+		t.Errorf("recent order = %+v, want the book title and 50000", summary.Recent[0])
+	}
+
+	if summary.Books[0].Title != "Sách chart-book" {
+		t.Errorf("book title = %q, want the book's own title", summary.Books[0].Title)
+	}
+	if summary.BooksSold != 1 || summary.BundlesSold != 0 {
+		t.Errorf("units = %d books, %d bundles, want 1 and 0", summary.BooksSold, summary.BundlesSold)
 	}
 }

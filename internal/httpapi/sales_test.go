@@ -93,3 +93,81 @@ func TestSalesReportsPaidOrdersOnly(t *testing.T) {
 		t.Error("bundles = null, want an empty array")
 	}
 }
+
+func TestSalesRejectsUnknownRange(t *testing.T) {
+	srv, _, _ := newTeacherServerWithDB(t)
+	teacher := loginCookie(t, srv, "sales-bad-range@example.com", "teacher")
+
+	rec := do(t, srv.Router(), http.MethodGet, "/api/teacher/sales?range=7d", "", teacher)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Code != "invalid_range" {
+		t.Errorf("code = %q, want invalid_range", body.Code)
+	}
+}
+
+func TestSalesRangeFiltersOlderOrders(t *testing.T) {
+	srv, pool, _ := newTeacherServerWithDB(t)
+	h := srv.Router()
+	teacher := loginCookie(t, srv, "sales-range-teacher@example.com", "teacher")
+	book := publishBook(t, h, teacher, "paid", "70000")
+	buyer := parentID(t, srv, pool)
+
+	bookID := book.ID
+	insertPaidOrder(t, pool, buyer, &bookID, 70000, "range-recent")
+	// Older than the 30-day window: it must still count for all time, not for the range.
+	if _, err := pool.ExecContext(t.Context(),
+		`INSERT INTO orders (buyer_id, book_id, amount_vnd, status, vnpay_txn_ref, paid_at)
+		 VALUES ($1, $2, 70000, 'paid', 'range-old', now() - interval '60 days')`,
+		buyer, bookID); err != nil {
+		t.Fatalf("insert old order: %v", err)
+	}
+
+	decode := func(path string) salesResponse {
+		t.Helper()
+		rec := do(t, h, http.MethodGet, path, "", teacher)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", path, rec.Code, rec.Body)
+		}
+		var resp salesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return resp
+	}
+
+	all := decode("/api/teacher/sales")
+	if all.Totals.Orders != 2 || all.Totals.RevenueVND != 140000 {
+		t.Errorf("all-time totals = %+v, want 2 orders and 140000", all.Totals)
+	}
+
+	last30 := decode("/api/teacher/sales?range=30d")
+	if last30.Totals.Orders != 1 || last30.Totals.RevenueVND != 70000 {
+		t.Errorf("30-day totals = %+v, want 1 order and 70000", last30.Totals)
+	}
+
+	// The screen reads titles, the weekly chart and the transaction list from the same call.
+	if len(all.Books) != 1 || all.Books[0].Title != book.Title {
+		t.Errorf("books = %+v, want one row titled %q", all.Books, book.Title)
+	}
+	if all.Totals.BooksSold != 2 || all.Totals.BundlesSold != 0 {
+		t.Errorf("units = %+v, want 2 books and 0 bundles", all.Totals)
+	}
+	if len(all.Trend) == 0 || len(all.Recent) != 2 {
+		t.Errorf("trend = %d weeks, recent = %d rows, want both populated",
+			len(all.Trend), len(all.Recent))
+	}
+	if all.Trend[len(all.Trend)-1].WeekStart == "" {
+		t.Error("trend week_start is empty, want a date for the axis label")
+	}
+	if len(last30.Recent) != 2 {
+		t.Errorf("recent = %d rows, want the ledger history regardless of range", len(last30.Recent))
+	}
+}
