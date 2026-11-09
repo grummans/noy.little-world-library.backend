@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"littleworld/internal/activities"
 	"littleworld/internal/auth"
 	"littleworld/internal/books"
 	"littleworld/internal/bundles"
@@ -61,13 +62,15 @@ func run() error {
 	// would panic on upload. Keep the interface nil when storage is absent.
 	var (
 		bookStore   books.Storage
-		bundleStore bundles.Storage
-		presigner   catalog.Presigner
+		bundleStore   bundles.Storage
+		presigner     catalog.Presigner
+		activityStore activities.Storage
 	)
 	if store != nil {
 		bookStore = store
 		bundleStore = store
 		presigner = store
+		activityStore = store
 	}
 
 	catalogService := catalog.New(pool, presigner)
@@ -81,6 +84,7 @@ func run() error {
 			Storage:        store,
 			Books:          books.New(pool, bookStore),
 			Bundles:        bundles.New(pool, bundleStore),
+			Activities:     activities.New(pool, activityStore),
 			Catalog:        catalogService,
 			Reading:        reading.New(pool, presigner),
 			Library:        library.New(pool, catalogService),

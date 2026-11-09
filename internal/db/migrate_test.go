@@ -20,7 +20,7 @@ func TestMigrationsUpDown(t *testing.T) {
 		t.Fatalf("up: %v", err)
 	}
 	for _, tbl := range []string{"users", "sessions", "books", "tags", "book_tags",
-		"bundles", "bundle_books", "bundle_tags", "orders"} {
+		"bundles", "bundle_books", "bundle_tags", "orders", "activities"} {
 		if !tableExists(t, pool, tbl) {
 			t.Errorf("table %s missing after up", tbl)
 		}

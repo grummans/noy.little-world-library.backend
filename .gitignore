@@ -8,3 +8,6 @@
 /api
 /migrate
 *.exe
+
+# Local dev server log
+/api.log

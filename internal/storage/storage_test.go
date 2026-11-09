@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/png"
 	"strings"
 	"testing"
 )
@@ -110,5 +113,73 @@ func TestValidateUploads(t *testing.T) {
 	}
 	if err := ValidateCover("image/png", MaxCoverBytes+1); !errors.Is(err, ErrInvalidImage) {
 		t.Errorf("oversized cover: err = %v", err)
+	}
+}
+
+func pngBytes(t *testing.T, width, height int) []byte {
+	t.Helper()
+
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	buf := &bytes.Buffer{}
+	if err := png.Encode(buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestThumbnailKeysAndLimits(t *testing.T) {
+	for contentType, want := range map[string]string{
+		"image/png":             "activities/5/thumbnail-abc.png",
+		"image/jpeg":            "activities/5/thumbnail-abc.jpg",
+		"image/webp":            "activities/5/thumbnail-abc.webp",
+		"IMAGE/WEBP; charset=x": "activities/5/thumbnail-abc.webp",
+	} {
+		key, err := ActivityThumbnailKey(5, contentType, "abc")
+		if err != nil || key != want {
+			t.Errorf("ActivityThumbnailKey(%q) = %q, %v", contentType, key, err)
+		}
+	}
+	if _, err := ActivityThumbnailKey(5, "image/gif", "abc"); !errors.Is(err, ErrInvalidThumbnail) {
+		t.Errorf("gif key: err = %v", err)
+	}
+
+	if _, err := ActivityThumbnailKey(5, "image/png", ""); !errors.Is(err, ErrInvalidThumbnail) {
+		t.Errorf("empty token: err = %v", err)
+	}
+
+	if err := ValidateThumbnail("image/webp", MaxThumbnailBytes); err != nil {
+		t.Errorf("valid webp rejected: %v", err)
+	}
+	if err := ValidateThumbnail("image/png", MaxThumbnailBytes+1); !errors.Is(err, ErrInvalidThumbnail) {
+		t.Errorf("oversized thumbnail: err = %v", err)
+	}
+}
+
+func TestValidateThumbnailImage(t *testing.T) {
+	// The ratio band is 1.70-2.10, so 1.91:1 passes while square and ultra-wide fail.
+	cases := []struct {
+		name        string
+		width       int
+		height      int
+		contentType string
+		wantErr     bool
+	}{
+		{"card shape", 1200, 630, "image/png", false},
+		{"low edge of band", 170, 100, "image/png", false},
+		{"below band", 169, 100, "image/png", true},
+		{"high edge of band", 210, 100, "image/png", false},
+		{"above band", 211, 100, "image/png", true},
+		{"square", 400, 400, "image/png", true},
+		{"tiny", 32, 32, "image/png", true},
+		// A declared type that does not match the bytes is rejected, not trusted.
+		{"declared jpeg, actual png", 1200, 630, "image/jpeg", true},
+	}
+
+	for _, tc := range cases {
+		data := pngBytes(t, tc.width, tc.height)
+		err := ValidateThumbnailImage(bytes.NewReader(data), int64(len(data)), tc.contentType)
+		if gotErr := err != nil; gotErr != tc.wantErr {
+			t.Errorf("%s: err = %v, wantErr = %v", tc.name, err, tc.wantErr)
+		}
 	}
 }

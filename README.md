@@ -126,6 +126,20 @@ Teacher Studio (`role=teacher`; sách của giáo viên khác trả 404, không 
 | POST | `/api/teacher/bundles/{id}/publish` | cần ≥ 1 sách paid + published của chính teacher |
 | POST | `/api/teacher/bundles/{id}/unpublish` | về draft |
 | GET | `/api/tags` | công khai, danh sách chủ đề để chọn |
+
+Góc vui học (Wordwall; game tạo ngoài hệ thống, chỉ lưu metadata + embed URL):
+
+| Method | Path | Ghi chú |
+|---|---|---|
+| GET | `/api/teacher/activities` | game của chính mình + `stats` (total/published/draft/hidden) |
+| POST | `/api/teacher/activities` | JSON metadata game Wordwall; thumbnail đi endpoint riêng |
+| GET / PUT | `/api/teacher/activities/{id}` | đọc/sửa metadata |
+| PUT | `/api/teacher/activities/{id}/thumbnail` | multipart field `thumbnail`: PNG/JPEG/WebP gần 1.91:1 |
+| PUT | `/api/teacher/activities/{id}/status` | `{status}`: `draft` / `hidden` / `published` (không moderation) |
+| GET | `/api/activities` | công khai, `q`, `game_type`, `skill`, `age`, `page`, `limit`; chỉ game published |
+| GET | `/api/activities/facets` | thể loại + kỹ năng đang có để dựng bộ lọc |
+| GET | `/api/activities/{slug}` | 404 cho draft/hidden |
+
 | POST | `/api/teacher/tags` | giáo viên tạo chủ đề: `{name}`, slug tự sinh |
 | DELETE | `/api/teacher/tags/{id}` | chỉ xoá được khi chưa gán cho sách/gói nào |
 

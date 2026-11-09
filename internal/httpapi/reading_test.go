@@ -17,6 +17,7 @@ import (
 	"littleworld/internal/dbtest"
 	"littleworld/internal/library"
 	"littleworld/internal/orders"
+	"littleworld/internal/activities"
 	"littleworld/internal/reading"
 	"littleworld/internal/sales"
 	"littleworld/internal/storage"
@@ -37,6 +38,7 @@ func newTeacherServerWithDB(t *testing.T) (*Server, *sql.DB, *storagetest.Mem) {
 		Books:          books.New(pool, store),
 		Bundles:        bundles.New(pool, store),
 		Catalog:        catalog.New(pool, store),
+		Activities:     activities.New(pool, store),
 		Reading:        reading.New(pool, store),
 		Library:        library.New(pool, catalog.New(pool, store)),
 		Orders:         orders.New(pool, vnpay.New(testVnpayConfig())),

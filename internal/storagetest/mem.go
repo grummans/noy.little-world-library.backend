@@ -16,6 +16,8 @@ import (
 type Mem struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	// FailPut, when set, makes Put fail so tests can check upload-error cleanup.
+	FailPut error
 }
 
 func New() *Mem {
@@ -27,6 +29,9 @@ type readAtCloser struct{ *bytes.Reader }
 func (readAtCloser) Close() error { return nil }
 
 func (m *Mem) Put(_ context.Context, key string, r io.Reader, _ int64, _ string) error {
+	if m.FailPut != nil {
+		return m.FailPut
+	}
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err

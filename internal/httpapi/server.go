@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"littleworld/internal/activities"
 	"littleworld/internal/auth"
 	"littleworld/internal/books"
 	"littleworld/internal/bundles"
@@ -28,6 +29,8 @@ type Deps struct {
 	Auth    *auth.Service
 	Books   *books.Service
 	Bundles *bundles.Service
+
+	Activities *activities.Service
 	Catalog *catalog.Service
 	Reading *reading.Service
 	Library *library.Service
@@ -96,6 +99,15 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("POST /api/teacher/tags", s.requireRole(auth.RoleTeacher, s.handleCreateTag))
 	mux.HandleFunc("DELETE /api/teacher/tags/{id}", s.requireRole(auth.RoleTeacher, s.handleDeleteTag))
 	mux.HandleFunc("GET /api/teacher/sales", s.requireRole(auth.RoleTeacher, s.handleSales))
+	mux.HandleFunc("GET /api/activities", s.handlePublicActivities)
+	mux.HandleFunc("GET /api/activities/facets", s.handleActivityFacets)
+	mux.HandleFunc("GET /api/activities/{slug}", s.handlePublicActivity)
+	mux.HandleFunc("GET /api/teacher/activities", s.requireRole(auth.RoleTeacher, s.handleListActivities))
+	mux.HandleFunc("POST /api/teacher/activities", s.requireRole(auth.RoleTeacher, s.handleCreateActivity))
+	mux.HandleFunc("GET /api/teacher/activities/{id}", s.requireRole(auth.RoleTeacher, s.handleGetActivity))
+	mux.HandleFunc("PUT /api/teacher/activities/{id}", s.requireRole(auth.RoleTeacher, s.handleUpdateActivity))
+	mux.HandleFunc("PUT /api/teacher/activities/{id}/thumbnail", s.requireRole(auth.RoleTeacher, s.handleReplaceActivityThumbnail))
+	mux.HandleFunc("PUT /api/teacher/activities/{id}/status", s.requireRole(auth.RoleTeacher, s.handleSetActivityStatus))
 
 	return s.checkOrigin(mux)
 }

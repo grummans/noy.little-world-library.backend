@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"littleworld/internal/activities"
 	"littleworld/internal/auth"
 	"littleworld/internal/books"
 	"littleworld/internal/bundles"
@@ -143,6 +144,48 @@ func run(wipe bool) error {
 			firstBundleID = bundleID
 		}
 		fmt.Printf("bundle %-31s published\n", b.title)
+	}
+
+	// The two games the public Góc vui học page shows; the game itself lives on Wordwall.
+	activitySvc := activities.New(db, store)
+	activitySeeds := []struct {
+		title    string
+		desc     string
+		gameType string
+		topic    string
+		skills   []string
+		ageMin   int16
+		ageMax   int16
+		embedURL string
+	}{
+		{"Chủ đề động vật",
+			"Bé nhận biết các con vật quen thuộc qua một trò chơi tương tác.",
+			"Ghép đôi", "Động vật", []string{"Nhận biết", "Từ vựng"}, 3, 5,
+			"https://wordwall.net/embed/629ec0e8ad7649f5b530f95fd81df87e?themeId=1&templateId=3&fontStackId=0"},
+		{"Chủ đề thế giới thực vật",
+			"Cùng bé khám phá cây cối và các loài hoa trong vườn.",
+			"Ghép đôi", "Thực vật", []string{"Quan sát", "Từ vựng"}, 4, 6,
+			"https://wordwall.net/embed/9dc14e870286476f9c37b78965bad24d?themeId=1&templateId=3&fontStackId=0"},
+	}
+	for _, a := range activitySeeds {
+		ageMin, ageMax := a.ageMin, a.ageMax
+		seeded, err := activitySvc.Create(ctx, teacherID, activities.Metadata{
+			Title:       a.title,
+			Description: a.desc,
+			EmbedURL:    a.embedURL,
+			GameType:    a.gameType,
+			Topic:       a.topic,
+			Skills:      a.skills,
+			AgeMin:      &ageMin,
+			AgeMax:      &ageMax,
+		})
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.title, err)
+		}
+		if _, err := activitySvc.SetStatus(ctx, teacherID, seeded.ID, activities.StatusPublished); err != nil {
+			return fmt.Errorf("%s: %w", a.title, err)
+		}
+		fmt.Printf("game   %-32s published\n", a.title)
 	}
 
 	// One paid order so the parent shelf has content on first login.

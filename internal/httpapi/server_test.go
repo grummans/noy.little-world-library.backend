@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"littleworld/internal/activities"
 	"littleworld/internal/auth"
 	"littleworld/internal/dbtest"
 )
@@ -19,6 +20,7 @@ func newTestServer(t *testing.T) *Server {
 	return New(Deps{
 		DB:            pool,
 		Auth:          auth.New(pool),
+		Activities:    activities.New(pool, nil),
 		Log:           slog.New(slog.DiscardHandler),
 		SecureCookies: false,
 	})
