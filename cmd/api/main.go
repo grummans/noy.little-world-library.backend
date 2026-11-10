@@ -61,7 +61,7 @@ func run() error {
 	// A nil *storage.Client in a books.Storage interface is not nil, so the service
 	// would panic on upload. Keep the interface nil when storage is absent.
 	var (
-		bookStore   books.Storage
+		bookStore     books.Storage
 		bundleStore   bundles.Storage
 		presigner     catalog.Presigner
 		activityStore activities.Storage

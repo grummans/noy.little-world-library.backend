@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"littleworld/internal/activities"
 	"littleworld/internal/auth"
 	"littleworld/internal/books"
 	"littleworld/internal/bundles"
@@ -17,7 +18,6 @@ import (
 	"littleworld/internal/dbtest"
 	"littleworld/internal/library"
 	"littleworld/internal/orders"
-	"littleworld/internal/activities"
 	"littleworld/internal/reading"
 	"littleworld/internal/sales"
 	"littleworld/internal/storage"

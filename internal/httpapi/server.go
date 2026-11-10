@@ -31,12 +31,12 @@ type Deps struct {
 	Bundles *bundles.Service
 
 	Activities *activities.Service
-	Catalog *catalog.Service
-	Reading *reading.Service
-	Library *library.Service
-	Orders  *orders.Service
-	Sales   *sales.Service
-	Log     *slog.Logger
+	Catalog    *catalog.Service
+	Reading    *reading.Service
+	Library    *library.Service
+	Orders     *orders.Service
+	Sales      *sales.Service
+	Log        *slog.Logger
 	// Storage is nil when S3 settings are absent; upload endpoints must check.
 	Storage *storage.Client
 	// SecureCookies must be true anywhere the site is served over HTTPS.

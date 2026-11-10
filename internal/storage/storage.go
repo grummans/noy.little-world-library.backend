@@ -34,11 +34,11 @@ const (
 )
 
 var (
-	ErrInvalidImage  = errors.New("cover must be a JPEG or PNG image")
-	ErrInvalidEpub   = errors.New("file must be an EPUB under 50 MB")
+	ErrInvalidImage = errors.New("cover must be a JPEG or PNG image")
+	ErrInvalidEpub  = errors.New("file must be an EPUB under 50 MB")
 
 	ErrInvalidThumbnail = errors.New("thumbnail must be a PNG, JPEG or WebP image close to 1.91:1")
-	ErrNotConfigured = errors.New("object storage is not configured")
+	ErrNotConfigured    = errors.New("object storage is not configured")
 )
 
 // coverExtensions maps an accepted image content type to the key extension.

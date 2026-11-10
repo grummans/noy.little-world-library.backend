@@ -33,6 +33,9 @@ var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrUnauthenticated    = errors.New("unauthenticated")
+	// Email and password were right, but the account is not the role this login screen is
+	// for, so no session is created.
+	ErrWrongRole = errors.New("account role does not match")
 )
 
 // dummyPasswordHash is a valid bcrypt hash of a throwaway string.
@@ -101,7 +104,12 @@ func (s *Service) Register(ctx context.Context, displayName, email, password, ro
 	return u, nil
 }
 
-func (s *Service) Login(ctx context.Context, email, password string) (Session, User, error) {
+// Sign-in is scoped to the role the visitor picks: the login screen has a parent tab and a
+// teacher tab, and standing in the wrong one is a user mistake, not a login.
+func (s *Service) Login(ctx context.Context, email, password, role string) (Session, User, error) {
+	if role != RoleParent && role != RoleTeacher {
+		return Session{}, User{}, fmt.Errorf("%w: role must be parent or teacher", ErrValidation)
+	}
 	email = strings.ToLower(strings.TrimSpace(email))
 
 	var (
@@ -123,6 +131,11 @@ func (s *Service) Login(ctx context.Context, email, password string) (Session, U
 
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return Session{}, User{}, ErrInvalidCredentials
+	}
+	// Password first, role second: a wrong password must never reveal which tab the account
+	// belongs to, and a login aimed at the wrong site gets no session.
+	if u.Role != role {
+		return Session{}, User{}, ErrWrongRole
 	}
 
 	sess, err := s.createSession(ctx, u.ID)

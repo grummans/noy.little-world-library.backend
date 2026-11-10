@@ -26,7 +26,7 @@ func TestLoginIsRateLimited(t *testing.T) {
 
 	attempt := func() int {
 		return do(t, h, http.MethodPost, "/api/auth/login",
-			`{"email":"nobody@example.com","password":"password123"}`).Code
+			`{"email":"nobody@example.com","password":"password123","role":"parent"}`).Code
 	}
 
 	for i := 0; i < 10; i++ {
@@ -44,7 +44,7 @@ func TestCrossSitePostIsRejected(t *testing.T) {
 	h := srv.Router()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login",
-		strings.NewReader(`{"email":"a@example.com","password":"password123"}`))
+		strings.NewReader(`{"email":"a@example.com","password":"password123","role":"parent"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "https://evil.example")
 	rec := httptest.NewRecorder()

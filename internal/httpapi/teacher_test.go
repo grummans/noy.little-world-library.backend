@@ -36,7 +36,7 @@ func loginCookie(t *testing.T, srv *Server, email string, role string) *http.Coo
 		t.Fatalf("register %s: status %d: %s", email, rec.Code, rec.Body)
 	}
 	return sessionCookieFrom(t, do(t, h, http.MethodPost, "/api/auth/login",
-		fmt.Sprintf(`{"email":%q,"password":"password123"}`, email)))
+		fmt.Sprintf(`{"email":%q,"password":"password123","role":%q}`, email, role)))
 }
 
 func multipartBody(t *testing.T, fields map[string]string, files map[string]struct {

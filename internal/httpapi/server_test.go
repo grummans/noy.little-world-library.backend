@@ -69,7 +69,7 @@ func TestAuthFlow(t *testing.T) {
 	}
 
 	login := do(t, h, http.MethodPost, "/api/auth/login",
-		`{"email":"parent@example.com","password":"password123"}`)
+		`{"email":"parent@example.com","password":"password123","role":"parent"}`)
 	if login.Code != http.StatusOK {
 		t.Fatalf("login status = %d, want 200: %s", login.Code, login.Body)
 	}
@@ -111,12 +111,43 @@ func TestLoginRejectsBadCredentials(t *testing.T) {
 		`{"display_name":"Bé Test","email":"parent@example.com","password":"password123","role":"parent"}`)
 
 	rec := do(t, h, http.MethodPost, "/api/auth/login",
-		`{"email":"parent@example.com","password":"nope-nope-nope"}`)
+		`{"email":"parent@example.com","password":"nope-nope-nope","role":"parent"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 	if len(rec.Result().Cookies()) != 0 {
 		t.Error("failed login set a cookie")
+	}
+}
+
+func TestLoginRejectsWrongRoleTab(t *testing.T) {
+	srv := newTestServer(t)
+	h := srv.Router()
+
+	_ = do(t, h, http.MethodPost, "/api/auth/register",
+		`{"display_name":"Bé Test","email":"parent@example.com","password":"password123","role":"parent"}`)
+
+	// Correct password, wrong sign-in tab: the API refuses and sets no cookie.
+	rec := do(t, h, http.MethodPost, "/api/auth/login",
+		`{"email":"parent@example.com","password":"password123","role":"teacher"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec.Body.Bytes()); code != "wrong_role" {
+		t.Errorf("error code = %q, want wrong_role", code)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Error("wrong-role login set a cookie")
+	}
+
+	// A missing role is a client bug, not a credential failure.
+	rec = do(t, h, http.MethodPost, "/api/auth/login",
+		`{"email":"parent@example.com","password":"password123"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing role: status = %d, want 400", rec.Code)
+	}
+	if code := errorCode(t, rec.Body.Bytes()); code != "validation" {
+		t.Errorf("missing role: error code = %q, want validation", code)
 	}
 }
 
@@ -134,9 +165,9 @@ func TestRoleGuard(t *testing.T) {
 	})
 
 	parentCookie := sessionCookieFrom(t, do(t, h, http.MethodPost, "/api/auth/login",
-		`{"email":"parent@example.com","password":"password123"}`))
+		`{"email":"parent@example.com","password":"password123","role":"parent"}`))
 	teacherCookie := sessionCookieFrom(t, do(t, h, http.MethodPost, "/api/auth/login",
-		`{"email":"teacher@example.com","password":"password123"}`))
+		`{"email":"teacher@example.com","password":"password123","role":"teacher"}`))
 
 	if rec := do(t, parentOnly, http.MethodGet, "/api/parent/library", "", parentCookie); rec.Code != http.StatusOK {
 		t.Errorf("parent status = %d, want 200", rec.Code)
