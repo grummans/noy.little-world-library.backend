@@ -107,6 +107,7 @@ type Filter struct {
 	Query    string
 	GameType string
 	Skill    string
+	Topic    string
 	Age      *int16
 	Page     int
 	Limit    int
@@ -116,4 +117,5 @@ type Filter struct {
 type Facets struct {
 	GameTypes []string `json:"game_types"`
 	Skills    []string `json:"skills"`
+	Topics    []string `json:"topics"`
 }

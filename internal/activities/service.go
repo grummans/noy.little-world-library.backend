@@ -261,33 +261,43 @@ func (s *Service) discardThumbnail(ctx context.Context, key string) {
 }
 
 // PublicList is the catalog query: published games only, filtered and paginated.
-func (s *Service) PublicList(ctx context.Context, filter Filter) ([]Activity, bool, error) {
+// The has_more flag is computed here, not by the caller, because the page and limit are
+// clamped in normalizeFilter: a caller recomputing it from the raw request would report
+// "no more pages" for a limit the database silently reduced.
+func (s *Service) PublicList(ctx context.Context, filter Filter) ([]Activity, int, bool, error) {
 	filter, err := normalizeFilter(filter)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
+	}
+
+	// The page and its total share publicWhere, so the counter can never disagree with
+	// the rows the visitor sees.
+	var total int
+	if err := s.db.QueryRowContext(ctx, countPublicQuery,
+		slug.Make(filter.Query), escapeLike(filter.Query), filter.GameType, filter.Skill,
+		filter.Topic, filter.Age,
+	).Scan(&total); err != nil {
+		return nil, 0, false, fmt.Errorf("count public activities: %w", err)
 	}
 
 	rows, err := s.db.QueryContext(ctx, listPublicQuery,
 		slug.Make(filter.Query), escapeLike(filter.Query), filter.GameType, filter.Skill,
-		filter.Age, filter.Limit+1, (filter.Page-1)*filter.Limit)
+		filter.Topic, filter.Age, filter.Limit, (filter.Page-1)*filter.Limit)
 	if err != nil {
-		return nil, false, fmt.Errorf("list public activities: %w", err)
+		return nil, 0, false, fmt.Errorf("list public activities: %w", err)
 	}
 	defer rows.Close()
 
 	list, err := scanActivities(rows)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 
-	hasMore := len(list) > filter.Limit
-	if hasMore {
-		list = list[:filter.Limit]
-	}
+	// One extra row would have been returned; its presence is the whole answer.
+	hasMore := (filter.Page-1)*filter.Limit+len(list) < total
 	s.attachThumbnails(ctx, list)
-	return list, hasMore, nil
+	return list, total, hasMore, nil
 }
-
 func (s *Service) PublicGet(ctx context.Context, activitySlug string) (Activity, error) {
 	activity, err := scanActivity(s.db.QueryRowContext(ctx,
 		selectActivity+` WHERE a.slug = $1 AND a.status = 'published'`, activitySlug))
@@ -304,7 +314,7 @@ func (s *Service) PublicGet(ctx context.Context, activitySlug string) (Activity,
 }
 
 func (s *Service) Facets(ctx context.Context) (Facets, error) {
-	facets := Facets{GameTypes: []string{}, Skills: []string{}}
+	facets := Facets{GameTypes: []string{}, Skills: []string{}, Topics: []string{}}
 
 	rows, err := s.db.QueryContext(ctx, gameTypesQuery)
 	if err != nil {
@@ -336,6 +346,22 @@ func (s *Service) Facets(ctx context.Context) (Facets, error) {
 	}
 	if err := skillRows.Err(); err != nil {
 		return Facets{}, fmt.Errorf("activity skills: %w", err)
+	}
+
+	topicRows, err := s.db.QueryContext(ctx, topicsQuery)
+	if err != nil {
+		return Facets{}, fmt.Errorf("activity topics: %w", err)
+	}
+	defer topicRows.Close()
+	for topicRows.Next() {
+		var topic string
+		if err := topicRows.Scan(&topic); err != nil {
+			return Facets{}, fmt.Errorf("scan topic: %w", err)
+		}
+		facets.Topics = append(facets.Topics, topic)
+	}
+	if err := topicRows.Err(); err != nil {
+		return Facets{}, fmt.Errorf("activity topics: %w", err)
 	}
 	return facets, nil
 }

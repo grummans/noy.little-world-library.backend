@@ -18,19 +18,27 @@ const activityColumns = `a.id, a.owner_id, a.slug, a.title, a.description, a.emb
 
 const selectActivity = `SELECT ` + activityColumns + ` FROM activities a`
 
-// $1 search as slug, $2 raw search, $3 game type, $4 skill, $5 age, $6 limit, $7 offset.
+// Public filters shared by the page query and its total count, so the two cannot drift.
+// $1 search as slug, $2 raw search, $3 game type, $4 skill, $5 topic, $6 age.
 // Only published games are reachable from the public catalog.
-const listPublicQuery = selectActivity + `
+const publicWhere = `
 WHERE a.status = 'published'
   AND ($2 = '' OR a.title ILIKE '%' || $2 || '%' ESCAPE '\'
        OR ($1 <> '' AND a.slug LIKE '%' || $1 || '%' ESCAPE '\'))
   AND ($3 = '' OR a.game_type = $3)
   AND ($4 = '' OR $4 = ANY (a.skills))
+  AND ($5 = '' OR a.topic = $5)
   -- COALESCE keeps a game with only one bound visible in its real range.
-  AND ($5::smallint IS NULL
-       OR (COALESCE(a.age_min, 0) <= $5 AND COALESCE(a.age_max, 18) >= $5))
+  AND ($6::smallint IS NULL
+       OR (COALESCE(a.age_min, 0) <= $6 AND COALESCE(a.age_max, 18) >= $6))`
+
+// $7 limit, $8 offset.
+const listPublicQuery = selectActivity + publicWhere + `
 ORDER BY a.published_at DESC, a.id DESC
-LIMIT $6 OFFSET $7`
+LIMIT $7 OFFSET $8`
+
+// The catalog prints "1-10 trong 24 trò chơi", so the page needs its filtered total.
+const countPublicQuery = `SELECT count(*) FROM activities a` + publicWhere
 
 const listByOwnerQuery = selectActivity + `
 WHERE a.owner_id = $1
@@ -47,6 +55,9 @@ const gameTypesQuery = `SELECT DISTINCT game_type FROM activities
 
 const skillsQuery = `SELECT DISTINCT skill FROM activities, unnest(skills) AS skill
 	WHERE status = 'published' ORDER BY skill`
+
+const topicsQuery = `SELECT DISTINCT topic FROM activities
+	WHERE status = 'published' AND topic <> '' ORDER BY topic`
 
 type scanner interface {
 	Scan(dest ...any) error

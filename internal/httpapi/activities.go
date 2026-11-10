@@ -75,10 +75,11 @@ func (s *Server) handlePublicActivities(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	list, hasMore, err := s.Activities.PublicList(r.Context(), activities.Filter{
+	list, total, hasMore, err := s.Activities.PublicList(r.Context(), activities.Filter{
 		Query:    query.Get("q"),
 		GameType: query.Get("game_type"),
 		Skill:    query.Get("skill"),
+		Topic:    query.Get("topic"),
 		Age:      age,
 		Page:     page,
 		Limit:    limit,
@@ -92,7 +93,13 @@ func (s *Server) handlePublicActivities(w http.ResponseWriter, r *http.Request) 
 	for _, activity := range list {
 		resp = append(resp, newActivityResponse(activity))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": resp, "has_more": hasMore})
+	// total drives "Hiển thị 1-10 trong 24 trò chơi" and the numbered pagination;
+	// has_more comes from the service, which knows the clamped page and limit.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":    resp,
+		"total":    total,
+		"has_more": hasMore,
+	})
 }
 
 // GET /api/activities/facets

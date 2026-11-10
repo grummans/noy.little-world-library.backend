@@ -195,10 +195,12 @@ func TestPublicListFilters(t *testing.T) {
 	motor.Title = "Vận động cùng bé"
 	motor.GameType = "Mê cung"
 	motor.Skills = []string{"Vận động"}
+	motor.Topic = "Vận động"
 	motor.AgeMin, motor.AgeMax = ptr[int16](6), ptr[int16](8)
 
 	draft := baseMeta()
 	draft.Title = "Bản nháp"
+	draft.Topic = "Chủ đề nháp"
 
 	animalsActivity, err := svc.Create(ctx, teacherID, animals)
 	if err != nil {
@@ -217,30 +219,43 @@ func TestPublicListFilters(t *testing.T) {
 		}
 	}
 
-	all, hasMore, err := svc.PublicList(ctx, activities.Filter{})
+	all, total, _, err := svc.PublicList(ctx, activities.Filter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(all) != 2 || hasMore {
-		t.Fatalf("published games = %d, has_more = %v", len(all), hasMore)
+	if len(all) != 2 || total != 2 {
+		t.Fatalf("published games = %d, total = %d", len(all), total)
 	}
 
-	byType, _, err := svc.PublicList(ctx, activities.Filter{GameType: "Mê cung"})
+	// A topic chip filter must narrow both the rows and the total.
+	byTopic, topicTotal, _, err := svc.PublicList(ctx, activities.Filter{Topic: "Động vật"})
+	if err != nil || len(byTopic) != 1 || topicTotal != 1 {
+		t.Fatalf("filter by topic: %v, %d items, total %d", err, len(byTopic), topicTotal)
+	}
+
+	// A page past the end is empty but keeps the same total, so the counter and the
+	// pagination never contradict the rows.
+	emptyPage, pageTotal, _, err := svc.PublicList(ctx, activities.Filter{Page: 3, Limit: 1})
+	if err != nil || len(emptyPage) != 0 || pageTotal != 2 {
+		t.Fatalf("page past the end: %v, %d items, total %d", err, len(emptyPage), pageTotal)
+	}
+
+	byType, _, _, err := svc.PublicList(ctx, activities.Filter{GameType: "Mê cung"})
 	if err != nil || len(byType) != 1 || byType[0].ID != motorActivity.ID {
 		t.Fatalf("filter by type: %v, %d items", err, len(byType))
 	}
 
-	bySkill, _, err := svc.PublicList(ctx, activities.Filter{Skill: "Từ vựng"})
+	bySkill, _, _, err := svc.PublicList(ctx, activities.Filter{Skill: "Từ vựng"})
 	if err != nil || len(bySkill) != 1 || bySkill[0].ID != animalsActivity.ID {
 		t.Fatalf("filter by skill: %v, %d items", err, len(bySkill))
 	}
 
-	byAge, _, err := svc.PublicList(ctx, activities.Filter{Age: ptr[int16](7)})
+	byAge, _, _, err := svc.PublicList(ctx, activities.Filter{Age: ptr[int16](7)})
 	if err != nil || len(byAge) != 1 || byAge[0].ID != motorActivity.ID {
 		t.Fatalf("filter by age: %v, %d items", err, len(byAge))
 	}
 
-	byQuery, _, err := svc.PublicList(ctx, activities.Filter{Query: "vận động"})
+	byQuery, _, _, err := svc.PublicList(ctx, activities.Filter{Query: "vận động"})
 	if err != nil || len(byQuery) != 1 {
 		t.Fatalf("search by title: %v, %d items", err, len(byQuery))
 	}
@@ -251,6 +266,10 @@ func TestPublicListFilters(t *testing.T) {
 	}
 	if len(facets.GameTypes) != 2 || len(facets.Skills) != 3 {
 		t.Errorf("facets = %+v", facets)
+	}
+	// Topic chips come from the published rows, so the draft's topic must not leak in.
+	if len(facets.Topics) != 2 {
+		t.Errorf("topics = %v", facets.Topics)
 	}
 }
 
