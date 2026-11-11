@@ -124,29 +124,51 @@ func TestLoginRejectsWrongRoleTab(t *testing.T) {
 	srv := newTestServer(t)
 	h := srv.Router()
 
-	_ = do(t, h, http.MethodPost, "/api/auth/register",
+	// The assertion below only means something if the account exists: an unknown email
+	// would also answer 401 with the same code.
+	registered := do(t, h, http.MethodPost, "/api/auth/register",
 		`{"display_name":"Bé Test","email":"parent@example.com","password":"password123","role":"parent"}`)
+	if registered.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, want 201: %s", registered.Code, registered.Body)
+	}
 
-	// Correct password, wrong sign-in tab: the API refuses and sets no cookie.
-	rec := do(t, h, http.MethodPost, "/api/auth/login",
+	// Correct password, wrong sign-in tab: it must be indistinguishable from a wrong
+	// password, otherwise the response tells an attacker that the account exists and
+	// which site it belongs to.
+	wrongTab := do(t, h, http.MethodPost, "/api/auth/login",
 		`{"email":"parent@example.com","password":"password123","role":"teacher"}`)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body)
-	}
-	if code := errorCode(t, rec.Body.Bytes()); code != "wrong_role" {
-		t.Errorf("error code = %q, want wrong_role", code)
-	}
-	if len(rec.Result().Cookies()) != 0 {
-		t.Error("wrong-role login set a cookie")
-	}
+	wrongPassword := do(t, h, http.MethodPost, "/api/auth/login",
+		`{"email":"parent@example.com","password":"not-the-password","role":"parent"}`)
 
-	// A missing role is a client bug, not a credential failure.
-	rec = do(t, h, http.MethodPost, "/api/auth/login",
-		`{"email":"parent@example.com","password":"password123"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("missing role: status = %d, want 400", rec.Code)
+	// Compare the two replies field by field: a difference in status, body or headers is
+	// exactly the signal an attacker would read to learn that the address is registered.
+	for name, res := range map[string]*httptest.ResponseRecorder{
+		"wrong tab":      wrongTab,
+		"wrong password": wrongPassword,
+	} {
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: status = %d, want 401: %s", name, res.Code, res.Body)
+		}
+		if code := errorCode(t, res.Body.Bytes()); code != "invalid_credentials" {
+			t.Errorf("%s: error code = %q, want invalid_credentials", name, code)
+		}
+		if res.Header().Get("Set-Cookie") != "" || len(res.Result().Cookies()) != 0 {
+			t.Errorf("%s: failed login set a cookie", name)
+		}
+		if got := res.Header().Get("WWW-Authenticate"); got != "" {
+			t.Errorf("%s: WWW-Authenticate = %q, want empty", name, got)
+		}
 	}
-	if code := errorCode(t, rec.Body.Bytes()); code != "validation" {
+	if wrongTab.Body.String() != wrongPassword.Body.String() {
+		t.Errorf("wrong tab answers %q, wrong password answers %q", wrongTab.Body, wrongPassword.Body)
+	}
+	// A missing role is a client bug, not a credential failure.
+	missing := do(t, h, http.MethodPost, "/api/auth/login",
+		`{"email":"parent@example.com","password":"password123"}`)
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("missing role: status = %d, want 400", missing.Code)
+	}
+	if code := errorCode(t, missing.Body.Bytes()); code != "validation" {
 		t.Errorf("missing role: error code = %q, want validation", code)
 	}
 }

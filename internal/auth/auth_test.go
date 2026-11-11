@@ -116,9 +116,10 @@ func TestLoginRejectsWrongRole(t *testing.T) {
 
 	before := countSessions(t, pool)
 
-	// Right password, wrong tab: the mismatch is reported, but no session may be created.
-	if _, _, err := svc.Login(ctx, "parent@example.com", "password123", auth.RoleTeacher); !errors.Is(err, auth.ErrWrongRole) {
-		t.Errorf("wrong role: err = %v, want ErrWrongRole", err)
+	// Right password, wrong tab: it must look exactly like a wrong password, and no
+	// session may be created, so a guess cannot confirm an address or its role.
+	if _, _, err := svc.Login(ctx, "parent@example.com", "password123", auth.RoleTeacher); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Errorf("wrong role: err = %v, want ErrInvalidCredentials", err)
 	}
 	if after := countSessions(t, pool); after != before {
 		t.Errorf("sessions after a wrong-role attempt = %d, want %d", after, before)

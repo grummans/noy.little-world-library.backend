@@ -71,8 +71,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "validation", err.Error())
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Email or password is incorrect.")
-	case errors.Is(err, auth.ErrWrongRole):
-		writeError(w, http.StatusForbidden, "wrong_role", "This account belongs to the other sign-in tab.")
 	case err != nil:
 		s.Log.Error("login", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "Could not sign you in.")

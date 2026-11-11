@@ -33,9 +33,6 @@ var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrUnauthenticated    = errors.New("unauthenticated")
-	// Email and password were right, but the account is not the role this login screen is
-	// for, so no session is created.
-	ErrWrongRole = errors.New("account role does not match")
 )
 
 // dummyPasswordHash is a valid bcrypt hash of a throwaway string.
@@ -132,10 +129,11 @@ func (s *Service) Login(ctx context.Context, email, password, role string) (Sess
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return Session{}, User{}, ErrInvalidCredentials
 	}
-	// Password first, role second: a wrong password must never reveal which tab the account
-	// belongs to, and a login aimed at the wrong site gets no session.
+	// A login aimed at the other site gets the same answer as a wrong password: revealing
+	// that the account exists and which tab it belongs to would confirm an address to
+	// anyone guessing, so the role check is deliberately indistinguishable.
 	if u.Role != role {
-		return Session{}, User{}, ErrWrongRole
+		return Session{}, User{}, ErrInvalidCredentials
 	}
 
 	sess, err := s.createSession(ctx, u.ID)
