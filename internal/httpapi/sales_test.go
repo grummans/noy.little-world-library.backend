@@ -167,6 +167,21 @@ func TestSalesRangeFiltersOlderOrders(t *testing.T) {
 	if all.Trend[len(all.Trend)-1].WeekStart == "" {
 		t.Error("trend week_start is empty, want a date for the axis label")
 	}
+	// The dashboard's daily chart is a fixed seven-day window ending today, independent of
+	// the period the totals cover; the 60-day-old order must not appear in it.
+	if len(all.Days) != 7 || len(last30.Days) != 7 {
+		t.Errorf("days = %d / %d buckets, want 7 for both ranges", len(all.Days), len(last30.Days))
+	}
+	var dailyTotal int64
+	for _, entry := range last30.Days {
+		if entry.Date == "" {
+			t.Error("day date is empty, want a date for the axis label")
+		}
+		dailyTotal += entry.RevenueVND
+	}
+	if dailyTotal != 70000 {
+		t.Errorf("daily total = %d, want the last week's 70000 only", dailyTotal)
+	}
 	if len(last30.Recent) != 2 {
 		t.Errorf("recent = %d rows, want the ledger history regardless of range", len(last30.Recent))
 	}

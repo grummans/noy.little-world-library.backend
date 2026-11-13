@@ -31,6 +31,13 @@ type Week struct {
 	RevenueVND int64
 }
 
+// Day is one calendar day of net revenue. The dashboard charts the last week day by day;
+// a weekly bucket would hide which day actually sold.
+type Day struct {
+	Date       time.Time
+	RevenueVND int64
+}
+
 // Order is a recently paid order, used for the "latest transactions" list.
 type Order struct {
 	PaidAt    time.Time
@@ -50,6 +57,7 @@ type Summary struct {
 	Books            []Item
 	Bundles          []Item
 	Trend            []Week
+	Days             []Day
 	Recent           []Order
 }
 
@@ -58,6 +66,9 @@ const recentOrders = 5
 
 // trendWeeks bounds the chart when the caller asks for all-time revenue.
 const trendWeeks = 12
+
+// dayTrendDays is the dashboard's daily window: today and the six days before it.
+const dayTrendDays = 7
 
 // reportZone is the calendar this report speaks in: Vietnam time, UTC+7 all year (no DST).
 // The SQL below spells out 'Asia/Ho_Chi_Minh'; that is the same offset, and Postgres needs
@@ -127,6 +138,26 @@ LEFT JOIN orders o
 GROUP BY w.week_start
 ORDER BY w.week_start`
 
+// dayTrendQuery is trendQuery at day granularity, with the same rule: a day without a sale
+// keeps a zero bar, and the window ends today in the report calendar.
+const dayTrendQuery = `
+WITH days AS (
+	SELECT generate_series(
+		date_trunc('day', $3::timestamptz AT TIME ZONE 'Asia/Ho_Chi_Minh') - make_interval(days => $2::int - 1),
+		date_trunc('day', $3::timestamptz AT TIME ZONE 'Asia/Ho_Chi_Minh'),
+		interval '1 day'
+	) AS day_start
+)
+SELECT d.day_start::date, COALESCE(SUM(o.amount_vnd), 0)::bigint
+FROM days d
+LEFT JOIN orders o
+	ON o.status = 'paid'
+	AND o.paid_at >= d.day_start AT TIME ZONE 'Asia/Ho_Chi_Minh'
+	AND o.paid_at < (d.day_start + interval '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh'
+	AND (o.book_id IN (SELECT id FROM books WHERE owner_id = $1)
+		OR o.bundle_id IN (SELECT id FROM bundles WHERE owner_id = $1))
+GROUP BY d.day_start
+ORDER BY d.day_start`
 const recentQuery = `
 SELECT o.paid_at, COALESCE(b.title, bu.title, ''), o.amount_vnd
 FROM orders o
@@ -182,6 +213,11 @@ func (s *Service) Summary(ctx context.Context, ownerID int64, since *time.Time, 
 	if summary.Trend, err = trend(ctx, tx, ownerID, trendWeeks, since, now); err != nil {
 		return Summary{}, err
 	}
+	// The daily chart is its own fixed window: the dashboard always shows the last week,
+	// whichever period the totals above cover.
+	if summary.Days, err = dayTrend(ctx, tx, ownerID, dayTrendDays, now); err != nil {
+		return Summary{}, err
+	}
 	if summary.Recent, err = recent(ctx, tx, ownerID); err != nil {
 		return Summary{}, err
 	}
@@ -228,6 +264,27 @@ func trend(ctx context.Context, q queryer, ownerID int64, count int, since *time
 		return nil, fmt.Errorf("read sales trend: %w", err)
 	}
 	return weeks, nil
+}
+
+func dayTrend(ctx context.Context, q queryer, ownerID int64, count int, now time.Time) ([]Day, error) {
+	rows, err := q.QueryContext(ctx, dayTrendQuery, ownerID, count, now)
+	if err != nil {
+		return nil, fmt.Errorf("query daily sales trend: %w", err)
+	}
+	defer rows.Close()
+
+	days := []Day{}
+	for rows.Next() {
+		var day Day
+		if err := rows.Scan(&day.Date, &day.RevenueVND); err != nil {
+			return nil, fmt.Errorf("scan daily sales trend: %w", err)
+		}
+		days = append(days, day)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read daily sales trend: %w", err)
+	}
+	return days, nil
 }
 
 func recent(ctx context.Context, q queryer, ownerID int64) ([]Order, error) {
