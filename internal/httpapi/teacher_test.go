@@ -625,3 +625,85 @@ func TestReadEndpointHidesDrafts(t *testing.T) {
 		t.Errorf("draft read status = %d, want 404", rec.Code)
 	}
 }
+
+// The detail page must tell a buyer it may read the book, and must stay public for everyone
+// else: the flag is per caller, so it can never be a cached, shared response.
+func TestCatalogDetailReportsAccess(t *testing.T) {
+	srv, pool, _ := newTeacherServerWithDB(t)
+	h := srv.Router()
+	teacher := loginCookie(t, srv, "teacher@example.com", auth.RoleTeacher)
+
+	body, contentType := multipartBody(t,
+		map[string]string{
+			"title":       "Sách trả phí",
+			"description": "Mô tả",
+			"access_type": books.AccessPaid,
+			"price_vnd":   "99000",
+		},
+		map[string]struct {
+			contentType string
+			data        []byte
+		}{
+			"epub":  {storage.EpubContentType, epubFixture(t)},
+			"cover": {"image/png", pngFixture(t)},
+		})
+	created := doUpload(t, h, "/api/teacher/books", teacher, body, contentType)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: %d: %s", created.Code, created.Body)
+	}
+	var book bookResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &book); err != nil {
+		t.Fatalf("decode book: %v", err)
+	}
+	if rec := do(t, h, http.MethodPost, "/api/teacher/books/"+itoa(book.ID)+"/publish", "", teacher); rec.Code != http.StatusOK {
+		t.Fatalf("publish: %d: %s", rec.Code, rec.Body)
+	}
+
+	detail := func(cookies ...*http.Cookie) (int, string, string) {
+		rec := do(t, h, http.MethodGet, "/api/books/"+book.Slug, "", cookies...)
+		var payload struct {
+			Access string `json:"access"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &payload)
+		return rec.Code, payload.Access, rec.Header().Get("Cache-Control")
+	}
+
+	// Anonymous: still a public page, no access.
+	if code, access, cache := detail(); code != http.StatusOK || access != "" {
+		t.Errorf("anonymous: status %d, access %q", code, access)
+	} else if cache != "private, no-store" {
+		t.Errorf("cache-control = %q, want private, no-store", cache)
+	}
+
+	parent := loginCookie(t, srv, "parent@example.com", auth.RoleParent)
+
+	// A signed-in parent who has not bought it yet.
+	if code, access, _ := detail(parent); code != http.StatusOK || access != "" {
+		t.Errorf("parent without order: status %d, access %q", code, access)
+	}
+
+	// A forged or expired cookie must read as anonymous, never 401/500.
+	forged := &http.Cookie{Name: sessionCookie, Value: "not-a-real-token"}
+	if code, access, _ := detail(forged); code != http.StatusOK || access != "" {
+		t.Errorf("forged cookie: status %d, access %q", code, access)
+	}
+
+	var parentID int64
+	if err := pool.QueryRowContext(t.Context(),
+		`SELECT id FROM users WHERE email = 'parent@example.com'`).Scan(&parentID); err != nil {
+		t.Fatalf("parent id: %v", err)
+	}
+	if _, err := pool.ExecContext(t.Context(),
+		`INSERT INTO orders (buyer_id, book_id, amount_vnd, status, vnpay_txn_ref, paid_at)
+		 VALUES ($1, $2, 99000, 'paid', 'ref-access-test', now())`, parentID, book.ID); err != nil {
+		t.Fatalf("insert paid order: %v", err)
+	}
+
+	// After buying: the page offers the reader, and the response is still per caller.
+	if code, access, _ := detail(parent); code != http.StatusOK || access != "purchase" {
+		t.Errorf("buyer: status %d, access %q, want purchase", code, access)
+	}
+	if code, access, _ := detail(); code != http.StatusOK || access != "" {
+		t.Errorf("anonymous after purchase: status %d, access %q", code, access)
+	}
+}

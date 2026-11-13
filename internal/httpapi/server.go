@@ -84,7 +84,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("GET /api/tags", s.handleListTags)
 
 	mux.HandleFunc("GET /api/books", s.handleCatalogList)
-	mux.HandleFunc("GET /api/books/{slug}", s.handleCatalogBook)
+	mux.HandleFunc("GET /api/books/{slug}", s.withOptionalUser(s.handleCatalogBook))
 	mux.HandleFunc("GET /api/bundles/{slug}", s.handleCatalogBundle)
 	mux.HandleFunc("GET /api/books/{slug}/read", s.withOptionalUser(s.handleReadBook))
 

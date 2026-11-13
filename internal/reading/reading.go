@@ -39,6 +39,39 @@ type Session struct {
 	ExpiresIn int
 }
 
+// CanRead answers the same access question without signing anything, so a catalog page can
+// show "Đọc ngay" to a buyer instead of offering checkout again. The source is "free",
+// "purchase" or "bundle"; an empty source means the caller has no access.
+func (s *Service) CanRead(ctx context.Context, userID int64, bookSlug string) (string, error) {
+	var (
+		bookID     int64
+		accessType string
+		epubKey    sql.NullString
+		bought     bool
+		inBundle   bool
+	)
+	err := s.db.QueryRowContext(ctx, accessQuery, bookSlug, userID).Scan(
+		&bookID, &accessType, &epubKey, &bought, &inBundle,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("check reading access: %w", err)
+	}
+
+	switch {
+	case accessType == catalog.AccessFree:
+		return "free", nil
+	case bought:
+		return "purchase", nil
+	case inBundle:
+		return "bundle", nil
+	default:
+		return "", nil
+	}
+}
+
 // Open returns a signed EPUB URL when userID (0 = anonymous) may read the book.
 //
 // Rules: a free published book is readable by anyone; a paid book needs a paid order

@@ -150,6 +150,48 @@ func TestBundlePurchaseGrantsItsBooksOnly(t *testing.T) {
 	}
 }
 
+// The catalog page asks the same access question without signing a URL: a buyer must get
+// "Đọc ngay" instead of being offered checkout again.
+func TestCanReadReportsSource(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	teacher := insertUser(t, f.db, "teacher@example.com", "teacher")
+	parent := insertUser(t, f.db, "parent@example.com", "parent")
+	other := insertUser(t, f.db, "other@example.com", "parent")
+	bookID := insertBook(t, f.db, teacher, "tra-phi", "paid", price(99000), "published")
+	insertBook(t, f.db, teacher, "mien-phi", "free", nil, "published")
+	var bundleID int64
+	if err := f.db.QueryRowContext(ctx,
+		`INSERT INTO bundles (owner_id, slug, title, price_vnd, status, published_at)
+		 VALUES ($1, 'goi', 'Gói', 199000, 'published', now()) RETURNING id`, teacher).Scan(&bundleID); err != nil {
+		t.Fatalf("insert bundle: %v", err)
+	}
+	if _, err := f.db.ExecContext(ctx,
+		`INSERT INTO bundle_books (bundle_id, book_id, position) VALUES ($1, $2, 1)`,
+		bundleID, bookID); err != nil {
+		t.Fatalf("insert bundle book: %v", err)
+	}
+
+	source, err := f.svc.CanRead(ctx, parent, "mien-phi")
+	if err != nil || source != "free" {
+		t.Errorf("free book: source = %q, err = %v", source, err)
+	}
+
+	if source, err := f.svc.CanRead(ctx, parent, "tra-phi"); err != nil || source != "" {
+		t.Errorf("no order: source = %q, err = %v, want empty", source, err)
+	}
+
+	insertOrder(t, f.db, parent, &bookID, nil, "paid")
+	if source, err := f.svc.CanRead(ctx, parent, "tra-phi"); err != nil || source != "purchase" {
+		t.Errorf("direct purchase: source = %q, err = %v", source, err)
+	}
+
+	insertOrder(t, f.db, other, nil, &bundleID, "paid")
+	if source, err := f.svc.CanRead(ctx, other, "tra-phi"); err != nil || source != "bundle" {
+		t.Errorf("bundle purchase: source = %q, err = %v", source, err)
+	}
+}
+
 func TestDraftBookIsNotReadable(t *testing.T) {
 	f := newFixture(t)
 	teacher := insertUser(t, f.db, "teacher@example.com", "teacher")
