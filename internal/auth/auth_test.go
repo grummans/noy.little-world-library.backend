@@ -70,7 +70,7 @@ func TestLoginCreatesUsableSession(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	sess, user, err := svc.Login(ctx, "Teacher@Example.com", "password123")
+	sess, user, err := svc.Login(ctx, "Teacher@Example.com", "password123", auth.RoleTeacher)
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -98,12 +98,53 @@ func TestLoginRejectsBadCredentials(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	if _, _, err := svc.Login(ctx, "parent@example.com", "wrong-password"); !errors.Is(err, auth.ErrInvalidCredentials) {
+	if _, _, err := svc.Login(ctx, "parent@example.com", "wrong-password", auth.RoleParent); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Errorf("wrong password: err = %v, want ErrInvalidCredentials", err)
 	}
-	if _, _, err := svc.Login(ctx, "nobody@example.com", "password123"); !errors.Is(err, auth.ErrInvalidCredentials) {
+	if _, _, err := svc.Login(ctx, "nobody@example.com", "password123", auth.RoleParent); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Errorf("unknown email: err = %v, want ErrInvalidCredentials", err)
 	}
+}
+
+func TestLoginRejectsWrongRole(t *testing.T) {
+	pool, svc := newService(t)
+	ctx := t.Context()
+
+	if _, err := svc.Register(ctx, "Bé Test", "parent@example.com", "password123", auth.RoleParent); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	before := countSessions(t, pool)
+
+	// Right password, wrong tab: it must look exactly like a wrong password, and no
+	// session may be created, so a guess cannot confirm an address or its role.
+	if _, _, err := svc.Login(ctx, "parent@example.com", "password123", auth.RoleTeacher); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Errorf("wrong role: err = %v, want ErrInvalidCredentials", err)
+	}
+	if after := countSessions(t, pool); after != before {
+		t.Errorf("sessions after a wrong-role attempt = %d, want %d", after, before)
+	}
+
+	// A bad password stays indistinguishable from an unknown account, whatever the tab.
+	if _, _, err := svc.Login(ctx, "parent@example.com", "wrong-password", auth.RoleTeacher); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Errorf("wrong password and role: err = %v, want ErrInvalidCredentials", err)
+	}
+
+	if _, _, err := svc.Login(ctx, "parent@example.com", "password123", ""); !errors.Is(err, auth.ErrValidation) {
+		t.Errorf("missing role: err = %v, want ErrValidation", err)
+	}
+	if _, _, err := svc.Login(ctx, "parent@example.com", "password123", "admin"); !errors.Is(err, auth.ErrValidation) {
+		t.Errorf("unknown role: err = %v, want ErrValidation", err)
+	}
+}
+
+func countSessions(t *testing.T, pool *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions`).Scan(&n); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	return n
 }
 
 func TestAuthenticateRejectsUnknownAndExpiredSessions(t *testing.T) {
@@ -141,7 +182,7 @@ func TestLogoutInvalidatesSession(t *testing.T) {
 	if _, err := svc.Register(ctx, "Bé Test", "parent@example.com", "password123", auth.RoleParent); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	sess, _, err := svc.Login(ctx, "parent@example.com", "password123")
+	sess, _, err := svc.Login(ctx, "parent@example.com", "password123", auth.RoleParent)
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
@@ -187,7 +228,7 @@ func TestRegisterStoresDisplayName(t *testing.T) {
 	}
 
 	// The name survives a login and a session lookup.
-	sess, loggedIn, err := svc.Login(ctx, "be@example.com", "password123")
+	sess, loggedIn, err := svc.Login(ctx, "be@example.com", "password123", auth.RoleParent)
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}

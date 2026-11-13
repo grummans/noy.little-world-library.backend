@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"littleworld/internal/activities"
 	"littleworld/internal/auth"
 	"littleworld/internal/books"
 	"littleworld/internal/bundles"
@@ -22,6 +23,7 @@ import (
 	"littleworld/internal/library"
 	"littleworld/internal/orders"
 	"littleworld/internal/reading"
+	"littleworld/internal/sales"
 	"littleworld/internal/storage"
 	"littleworld/internal/vnpay"
 )
@@ -59,14 +61,16 @@ func run() error {
 	// A nil *storage.Client in a books.Storage interface is not nil, so the service
 	// would panic on upload. Keep the interface nil when storage is absent.
 	var (
-		bookStore   books.Storage
-		bundleStore bundles.Storage
-		presigner   catalog.Presigner
+		bookStore     books.Storage
+		bundleStore   bundles.Storage
+		presigner     catalog.Presigner
+		activityStore activities.Storage
 	)
 	if store != nil {
 		bookStore = store
 		bundleStore = store
 		presigner = store
+		activityStore = store
 	}
 
 	catalogService := catalog.New(pool, presigner)
@@ -80,10 +84,12 @@ func run() error {
 			Storage:        store,
 			Books:          books.New(pool, bookStore),
 			Bundles:        bundles.New(pool, bundleStore),
+			Activities:     activities.New(pool, activityStore),
 			Catalog:        catalogService,
 			Reading:        reading.New(pool, presigner),
 			Library:        library.New(pool, catalogService),
 			Orders:         orders.New(pool, vnpay.New(cfg.Vnpay)),
+			Sales:          sales.New(pool),
 			SecureCookies:  cfg.AppEnv != "dev",
 			VnpayReturnURL: cfg.VnpayReturnURL,
 		}).Router(),

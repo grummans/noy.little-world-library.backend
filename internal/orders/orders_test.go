@@ -202,6 +202,141 @@ func TestReturnStateAppliesVerifiedSuccess(t *testing.T) {
 	}
 }
 
+// The buyer who cancels on VNPay's page comes back with code 24 and no IPN guarantee: the
+// page must say "cancelled" instead of polling for a verdict that never arrives.
+func TestReturnStateClosesCancelledOrder(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	owner := teacher(t, f.db)
+	insertBook(t, f.db, owner, "tra-phi", "paid", "published", price(5000))
+
+	checkout, err := f.svc.Create(ctx, f.parent, "tra-phi", "", "https://r", "1.1.1.1")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, checkout.Order.TxnRef, 5000, "24", "02"))
+	if state.Status != "cancelled" {
+		t.Errorf("status = %q, want cancelled", state.Status)
+	}
+	if state.Code != "24" {
+		t.Errorf("code = %q, want 24", state.Code)
+	}
+
+	order, err := f.svc.Get(ctx, f.parent, checkout.Order.TxnRef)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	if order.Status != "cancelled" || order.PaidAt != nil {
+		t.Errorf("order after cancel = %+v, want cancelled without paid_at", order)
+	}
+
+	// A refusal other than an explicit cancel is a failure, not a cancel.
+	other, err := f.svc.Create(ctx, f.parent, "tra-phi", "", "https://r", "1.1.1.1")
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	if state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, other.Order.TxnRef, 5000, "51", "02")); state.Status != "failed" {
+		t.Errorf("status = %q, want failed", state.Status)
+	}
+}
+
+// A signed return is not automatically a verdict: the amount must match the order and the
+// code must be an explicit refusal before anything is written.
+func TestReturnStateIgnoresNonVerdicts(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	owner := teacher(t, f.db)
+
+	// One book per subtest: a paid order grants ownership, and buying the same book twice is
+	// refused before the return page is ever reached.
+	pending := func(t *testing.T, slug string) (string, func() string) {
+		t.Helper()
+		insertBook(t, f.db, owner, slug, "paid", "published", price(5000))
+		checkout, err := f.svc.Create(ctx, f.parent, slug, "", "https://r", "1.1.1.1")
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		return checkout.Order.TxnRef, func() string {
+			order, err := f.svc.Get(ctx, f.parent, checkout.Order.TxnRef)
+			if err != nil {
+				t.Fatalf("get order: %v", err)
+			}
+			return order.Status
+		}
+	}
+
+	// Success code without a transaction status: unfinished, so it must stay pending.
+	t.Run("success without transaction status", func(t *testing.T) {
+		ref, status := pending(t, "tra-phi-1")
+		if state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, ref, 5000, "00", "")); state.Status != "verifying" {
+			t.Errorf("status = %q, want verifying", state.Status)
+		}
+		if got := status(); got != "pending" {
+			t.Errorf("order = %q, want pending", got)
+		}
+	})
+
+	// Replaying the outbound payment URL carries no response code at all.
+	t.Run("no response code", func(t *testing.T) {
+		ref, status := pending(t, "tra-phi-2")
+		if state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, ref, 5000, "", "")); state.Status != "verifying" {
+			t.Errorf("status = %q, want verifying", state.Status)
+		}
+		if got := status(); got != "pending" {
+			t.Errorf("order = %q, want pending", got)
+		}
+	})
+
+	// A signed callback for a different amount must not touch the order, either way.
+	t.Run("wrong amount", func(t *testing.T) {
+		ref, status := pending(t, "tra-phi-3")
+		if state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, ref, 1000, "24", "02")); state.Status != "invalid" {
+			t.Errorf("status = %q, want invalid", state.Status)
+		}
+		if got := status(); got != "pending" {
+			t.Errorf("order = %q, want pending", got)
+		}
+	})
+
+	// Paid is final: a late cancel cannot take it back or clear paid_at.
+	t.Run("cancel after paid", func(t *testing.T) {
+		ref, status := pending(t, "tra-phi-4")
+		if state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, ref, 5000, "00", "00")); state.Status != "paid" {
+			t.Fatalf("status = %q, want paid", state.Status)
+		}
+		if state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, ref, 5000, "24", "02")); state.Status != "paid" {
+			t.Errorf("late cancel status = %q, want paid", state.Status)
+		}
+		order, err := f.svc.Get(ctx, f.parent, ref)
+		if err != nil {
+			t.Fatalf("get order: %v", err)
+		}
+		if order.Status != "paid" || order.PaidAt == nil {
+			t.Errorf("order after late cancel = %+v, want paid with paid_at", order)
+		}
+		if got := status(); got != "paid" {
+			t.Errorf("status = %q, want paid", got)
+		}
+	})
+
+	// A later confirmed success wins over an earlier cancel (two tabs, a retry).
+	t.Run("success after cancel", func(t *testing.T) {
+		ref, _ := pending(t, "tra-phi-5")
+		if state := f.svc.ReturnState(ctx, callbackFor(t, f.gateway, ref, 5000, "24", "02")); state.Status != "cancelled" {
+			t.Fatalf("status = %q, want cancelled", state.Status)
+		}
+		// A real success carries its own transaction number: reusing the cancel's number would
+		// hit the unique index that stops one VNPay transaction being recorded twice.
+		success := callbackFor(t, f.gateway, ref, 5000, "00", "00")
+		success.Set("vnp_TransactionNo", "14000002")
+		success.Set("vnp_SecureHash", f.gateway.SignValues(success))
+		if state := f.svc.ReturnState(ctx, success); state.Status != "paid" {
+			t.Errorf("status after success = %q, want paid", state.Status)
+		}
+	})
+}
+
 func TestIPNGrantsAccessOnceAndOnlyOnce(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

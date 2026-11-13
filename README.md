@@ -23,14 +23,79 @@ Endpoint nhận JSON yêu cầu header `Content-Type: application/json` (curl: `
 
 - SQL nhúng bằng `go:embed` trong `internal/db/migrations/`, chạy bằng goose library
   (không cần cài goose CLI).
-- Test tự tạo schema tạm (`mtest_<timestamp>`), up/down trong đó rồi drop — không đụng
-  dữ liệu dev. `down`/`reset` bị chặn nếu database không phải `little_world_dev`,
-  trừ khi đặt `ALLOW_DESTRUCTIVE_MIGRATIONS=1`.
-- Seed dev tách riêng khỏi chuỗi migration (chưa làm, TODO 2.5).
+- Test tự tạo schema tạm (`mtest_<timestamp>`), chạy up/down rồi drop — không đụng dữ liệu dev. `down`/`reset` bị chặn nếu database không phải `little_world_dev`, trừ khi đặt `ALLOW_DESTRUCTIVE_MIGRATIONS=1`.
+- Seed dev tách riêng khỏi chuỗi migration: `go run ./cmd/seed`; `reset` + seed chỉ dành cho môi trường dev.
 
-## Chưa có
+## Deploy staging (server `.48`)
 
-`docker-compose.yml`, seed dev, public catalog, Parent Library, VNPay (TODO mục 1, 2.5, 5–6).
+Stack: `docker-compose.yml` (API + PostgreSQL 16 + SPA) chạy trên một network nội bộ; chỉ hai cổng host mở cho Nginx Proxy Manager trên `.102` (`API_PORT`, `WEB_PORT`). MinIO private đang chạy sẵn trên `.48:9000`.
+`/home/grummans/little-world-library/staging/`, với frontend ở `../noy.little-world-library`
+(nên `web.build.context` trỏ tới đó).
+
+```bash
+# 1. Bí mật chỉ nằm trên server: tạo .env từ mẫu, điền tay, không commit, không copy từ máy dev.
+cp .env.staging.example .env && chmod 600 .env
+
+# 2. Pull the image tags built by GitHub Actions; record them for rollback.
+docker compose pull
+docker compose images
+
+# 3. Migration một lần, trước khi start/cập nhật API. Không bao giờ reset/seed ở staging.
+docker compose --profile tools run --rm migrate status
+docker compose --profile tools run --rm migrate up
+
+# 4. Start (API chờ PostgreSQL healthy; bucket staging phải tồn tại trên MinIO có sẵn).
+docker compose up -d
+docker compose ps                # api phải healthy
+
+# 5. Smoke test
+curl -fsS http://127.0.0.1:8081/healthz          # {"status":"ok"}: DB + bucket
+curl -fsS 'http://127.0.0.1:8081/api/books?limit=1'
+curl -fsS -o /dev/null -w '%{http_code}\n' https://staging-littleworld.duckdns.org/
+```
+
+`migrate down|reset` bị chặn sẵn vì database không phải `little_world_dev`; đừng đặt
+`ALLOW_DESTRUCTIVE_MIGRATIONS=1` ở staging.
+
+### Nginx Proxy Manager (`.102`)
+
+Proxy host `staging-littleworld.duckdns.org` → `http://192.168.1.48:8082` (web), TLS bật,
+Advanced thêm khối `/api` (giữ nguyên Host và `X-Forwarded-*` — `checkOrigin` so `Origin`
+với `Host`, còn rate limit đọc `X-Forwarded-For`). Không cần CORS vì API same-origin:
+
+```nginx
+location /api/ {
+    proxy_pass http://192.168.1.48:8081;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_http_version 1.1;
+    client_max_body_size 100m;
+    proxy_request_buffering off;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+}
+```
+
+Proxy host `media-staging-littleworld.duckdns.org` → `http://192.168.1.48:9000` (MinIO S3 đang có sẵn, TLS bật). Bucket vẫn private: chỉ presigned GET 15 phút mới đọc được object.
+
+### Rollback
+
+```bash
+# Đổi API_IMAGE / WEB_IMAGE trong .env về tag trước đó rồi:
+docker compose up -d --no-build api web
+```
+
+Chỉ rollback image. Không chạy migration `down` và không reset database staging; nếu
+migration mới không tương thích thì dừng release và restore volume `postgres-data` từ bản
+backup trước migration (`pg_dump` trước bước 3).
+
+## Pending
+
+Playwright e2e tự động, xác minh đủ các kịch bản VNPay sandbox bằng credentials thực
+(TODO mục 1, 6, 8).
 
 ## API
 
@@ -61,6 +126,20 @@ Teacher Studio (`role=teacher`; sách của giáo viên khác trả 404, không 
 | POST | `/api/teacher/bundles/{id}/publish` | cần ≥ 1 sách paid + published của chính teacher |
 | POST | `/api/teacher/bundles/{id}/unpublish` | về draft |
 | GET | `/api/tags` | công khai, danh sách chủ đề để chọn |
+
+Góc vui học (Wordwall; game tạo ngoài hệ thống, chỉ lưu metadata + embed URL):
+
+| Method | Path | Ghi chú |
+|---|---|---|
+| GET | `/api/teacher/activities` | game của chính mình + `stats` (total/published/draft/hidden) |
+| POST | `/api/teacher/activities` | JSON metadata game Wordwall; thumbnail đi endpoint riêng |
+| GET / PUT | `/api/teacher/activities/{id}` | đọc/sửa metadata |
+| PUT | `/api/teacher/activities/{id}/thumbnail` | multipart field `thumbnail`: PNG/JPEG/WebP gần 1.91:1 |
+| PUT | `/api/teacher/activities/{id}/status` | `{status}`: `draft` / `hidden` / `published` (không moderation) |
+| GET | `/api/activities` | công khai, `q`, `game_type`, `skill`, `age`, `page`, `limit`; chỉ game published |
+| GET | `/api/activities/facets` | thể loại + kỹ năng đang có để dựng bộ lọc |
+| GET | `/api/activities/{slug}` | 404 cho draft/hidden |
+
 | POST | `/api/teacher/tags` | giáo viên tạo chủ đề: `{name}`, slug tự sinh |
 | DELETE | `/api/teacher/tags/{id}` | chỉ xoá được khi chưa gán cho sách/gói nào |
 
@@ -77,24 +156,22 @@ Parent Library (`role=parent`):
 
 | Method | Path | Ghi chú |
 |---|---|---|
-| GET | `/api/parent/library` | `{bundles, books, continue}`; bundle giữ card sản phẩm, sách trong gói nằm ở `continue` với `origin.type = "bundle"` |
+| GET | `/api/parent/library` | `{bundles, books, readable}`; bundle giữ card sản phẩm, sách trong bundle nằm ở `readable` với `origin.type = "bundle"` |
 
 Thanh toán (VNPay sandbox; để trống `VNPAY_*` thì checkout trả 503):
 
 | Method | Path | Ghi chú |
 |---|---|---|
 | POST | `/api/orders` | `{book_slug}` hoặc `{bundle_slug}` → `{txn_ref, payment_url, amount_vnd}`; giá lấy từ DB |
+| GET | `/api/orders` | danh sách đơn của parent hiện tại |
 | GET | `/api/orders/{txnRef}` | buyer poll trạng thái; order của người khác = 404 |
-| GET | `/api/payments/vnpay/return` | chỉ đọc: `paid / verifying / failed / cancelled / invalid` |
-| GET | `/api/payments/vnpay/ipn` | **nơi duy nhất** cấp quyền; trả `{RspCode, Message}` |
+| GET | `/api/payments/vnpay/return` | xác thực callback, áp dụng success hợp lệ và trả `paid / verifying / failed / cancelled / invalid` |
+| GET | `/api/payments/vnpay/ipn` | xác thực server-to-server, cấp quyền idempotent; trả `{RspCode, Message}` |
 
 IPN URL **không** nằm trong email VNPay gửi: phải khai trên merchant portal
 (`https://sandbox.vnpayment.vn/merchantv2/Account/TerminalEdit.htm` cho sandbox; production
 thì liên hệ VNPay). URL IPN bắt buộc HTTPS.
-
-Chỉ IPN đã verify chữ ký + đúng `vnp_TmnCode` + `vnp_Amount` khớp `amount_vnd * 100` + có
-`vnp_TransactionStatus = 00` mới chuyển order sang `paid`. Lặp IPN trả `02`, không cấp
-quyền lần hai. Browser Return không bao giờ cấp quyền, kể cả khi tự gọi endpoint IPN.
+IPN xác thực chữ ký, `vnp_TmnCode`, `vnp_Amount = amount_vnd * 100` và `vnp_TransactionStatus = 00` trước khi chuyển order sang `paid`; lặp IPN trả `02`, không cấp quyền lần hai. Return URL cũng xác thực toàn bộ callback trước khi áp dụng giao dịch thành công, nên không tin dữ liệu query thô từ browser.
 
 Cover trả về dạng presigned URL 15 phút trong `cover_url`; ký thất bại thì field rỗng
 (chợ ảnh placeholder), không làm hỏng endpoint. `book_count` của gói chỉ đếm sách
@@ -138,7 +215,7 @@ bundles/<id>/cover.{jpg,png}
 
 Hai endpoint vì chữ ký S3 gắn với `Host` của URL:
 
-- `S3_ENDPOINT` — API gọi (`http://minio:9000` trong compose, `.48:9000` khi dev).
+- `S3_ENDPOINT` — API gọi MinIO hiện có trên `.48` (`http://192.168.1.48:9000` ở staging/dev).
 - `S3_PUBLIC_ENDPOINT` — host nhúng vào presigned URL, phải là host browser dùng được
   (`https://media.littleworld.cloud` khi lên prod). Presigned GET hết hạn sau 15 phút.
 - Thiếu cấu hình S3 thì API vẫn chạy (auth/catalog), `storage.Client` = nil, chưa có upload.

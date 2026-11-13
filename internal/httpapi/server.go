@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"littleworld/internal/activities"
 	"littleworld/internal/auth"
 	"littleworld/internal/books"
 	"littleworld/internal/bundles"
@@ -19,6 +20,7 @@ import (
 	"littleworld/internal/library"
 	"littleworld/internal/orders"
 	"littleworld/internal/reading"
+	"littleworld/internal/sales"
 	"littleworld/internal/storage"
 )
 
@@ -27,11 +29,14 @@ type Deps struct {
 	Auth    *auth.Service
 	Books   *books.Service
 	Bundles *bundles.Service
-	Catalog *catalog.Service
-	Reading *reading.Service
-	Library *library.Service
-	Orders  *orders.Service
-	Log     *slog.Logger
+
+	Activities *activities.Service
+	Catalog    *catalog.Service
+	Reading    *reading.Service
+	Library    *library.Service
+	Orders     *orders.Service
+	Sales      *sales.Service
+	Log        *slog.Logger
 	// Storage is nil when S3 settings are absent; upload endpoints must check.
 	Storage *storage.Client
 	// SecureCookies must be true anywhere the site is served over HTTPS.
@@ -79,7 +84,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("GET /api/tags", s.handleListTags)
 
 	mux.HandleFunc("GET /api/books", s.handleCatalogList)
-	mux.HandleFunc("GET /api/books/{slug}", s.handleCatalogBook)
+	mux.HandleFunc("GET /api/books/{slug}", s.withOptionalUser(s.handleCatalogBook))
 	mux.HandleFunc("GET /api/bundles/{slug}", s.handleCatalogBundle)
 	mux.HandleFunc("GET /api/books/{slug}/read", s.withOptionalUser(s.handleReadBook))
 
@@ -93,6 +98,16 @@ func (s *Server) Router() http.Handler {
 
 	mux.HandleFunc("POST /api/teacher/tags", s.requireRole(auth.RoleTeacher, s.handleCreateTag))
 	mux.HandleFunc("DELETE /api/teacher/tags/{id}", s.requireRole(auth.RoleTeacher, s.handleDeleteTag))
+	mux.HandleFunc("GET /api/teacher/sales", s.requireRole(auth.RoleTeacher, s.handleSales))
+	mux.HandleFunc("GET /api/activities", s.handlePublicActivities)
+	mux.HandleFunc("GET /api/activities/facets", s.handleActivityFacets)
+	mux.HandleFunc("GET /api/activities/{slug}", s.handlePublicActivity)
+	mux.HandleFunc("GET /api/teacher/activities", s.requireRole(auth.RoleTeacher, s.handleListActivities))
+	mux.HandleFunc("POST /api/teacher/activities", s.requireRole(auth.RoleTeacher, s.handleCreateActivity))
+	mux.HandleFunc("GET /api/teacher/activities/{id}", s.requireRole(auth.RoleTeacher, s.handleGetActivity))
+	mux.HandleFunc("PUT /api/teacher/activities/{id}", s.requireRole(auth.RoleTeacher, s.handleUpdateActivity))
+	mux.HandleFunc("PUT /api/teacher/activities/{id}/thumbnail", s.requireRole(auth.RoleTeacher, s.handleReplaceActivityThumbnail))
+	mux.HandleFunc("PUT /api/teacher/activities/{id}/status", s.requireRole(auth.RoleTeacher, s.handleSetActivityStatus))
 
 	return s.checkOrigin(mux)
 }

@@ -58,14 +58,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		Role     string `json:"role"`
 	}
 	if err := decodeJSON(w, r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", "Malformed request body.")
 		return
 	}
 
-	sess, user, err := s.Auth.Login(r.Context(), in.Email, in.Password)
+	sess, user, err := s.Auth.Login(r.Context(), in.Email, in.Password, in.Role)
 	switch {
+	case errors.Is(err, auth.ErrValidation):
+		writeError(w, http.StatusBadRequest, "validation", err.Error())
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Email or password is incorrect.")
 	case err != nil:

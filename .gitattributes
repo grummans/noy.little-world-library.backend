@@ -1,0 +1,2 @@
+# Go's formatter emits LF; keep the checkout identical on Windows and Linux CI.
+*.go text eol=lf

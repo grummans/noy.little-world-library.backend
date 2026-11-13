@@ -136,6 +136,12 @@ func (s *Service) ReturnState(ctx context.Context, query url.Values) ReturnState
 		return ReturnState{Status: "invalid", Message: "Không tìm thấy đơn hàng."}
 	}
 
+	// Same check as the IPN: a signed callback whose amount is not this order's amount must
+	// not touch it. Verified does not mean correct.
+	if result.AmountRaw != order.AmountVND*100 {
+		return ReturnState{Status: "invalid", Message: "Số tiền không khớp với đơn hàng.", TxnRef: order.TxnRef}
+	}
+
 	// A verified success settles the order even if the IPN never arrives. applyResult is
 	// idempotent, so the IPN landing later is still a no-op.
 	if result.Confirmed && order.Status != StatusPaid {
@@ -144,6 +150,22 @@ func (s *Service) ReturnState(ctx context.Context, query url.Values) ReturnState
 		}
 		if updated, err := s.byTxnRef(ctx, result.TxnRef); err == nil {
 			order = updated
+		}
+	}
+
+	// A verified cancel or failure closes the order here as well. Leaving it pending made the
+	// page poll for a verdict that never came, and kept the order holding its reuse window
+	// for a payment VNPay had already refused.
+	//
+	// Only an explicit refusal counts: no response code at all means this query is not a
+	// result (replaying the outbound payment URL is signed too), and code 00 without a
+	// transaction status is an unfinished success, not a failure.
+	refused := result.ResponseCode != "" && result.ResponseCode != vnpay.SuccessCode
+	if refused && order.Status == StatusPending {
+		if _, err := s.applyResult(ctx, order.ID, statusForCode(result.ResponseCode), result); err == nil {
+			if updated, err := s.byTxnRef(ctx, result.TxnRef); err == nil {
+				order = updated
+			}
 		}
 	}
 
@@ -232,7 +254,8 @@ func statusForCode(code string) string {
 func messageForCode(code string) string {
 	switch code {
 	case codeCancelled:
-		return "Bạn đã huỷ thanh toán."
+		// The page title already says "Bạn đã huỷ thanh toán"; this line says what to do next.
+		return "Đơn chưa được thanh toán. Bạn có thể thử lại bất cứ lúc nào."
 	case "11":
 		return "Đã hết thời gian thanh toán. Vui lòng thử lại."
 	case "51":

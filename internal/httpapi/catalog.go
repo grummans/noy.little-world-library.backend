@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"littleworld/internal/catalog"
+	"littleworld/internal/reading"
 )
 
 type cardResponse struct {
@@ -95,16 +96,34 @@ func (s *Server) handleCatalogList(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/books/{slug}
 func (s *Server) handleCatalogBook(w http.ResponseWriter, r *http.Request) {
-	detail, err := s.Catalog.Book(r.Context(), r.PathValue("slug"))
+	slug := r.PathValue("slug")
+	detail, err := s.Catalog.Book(r.Context(), slug)
 	if err != nil {
 		s.writeCatalogError(w, err)
 		return
 	}
 
+	// access tells the page whether to offer "Đọc ngay" or checkout: a buyer must not be
+	// asked to pay twice. Anonymous callers only ever get "free".
+	access := ""
+	if detail.Card.AccessType == catalog.AccessFree {
+		access = "free"
+	} else if user, ok := userFrom(r); ok {
+		if source, err := s.Reading.CanRead(r.Context(), user.ID, slug); err == nil {
+			access = source
+		} else if !errors.Is(err, reading.ErrNotFound) {
+			s.Log.Error("catalog access", "err", err)
+		}
+	}
+
+	// access answers for one caller, so a shared cache must never replay it: a buyer's
+	// "purchase" would otherwise be served to everyone else, or "" cached for the buyer.
+	w.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"book":        newCardResponse(detail.Card),
 		"description": detail.Description,
 		"has_epub":    detail.HasEPUB,
+		"access":      access,
 	})
 }
 

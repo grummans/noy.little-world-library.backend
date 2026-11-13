@@ -18,6 +18,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	_ "golang.org/x/image/webp"
 )
 
 const (
@@ -26,14 +27,18 @@ const (
 	MaxEpubBytes  = 50 << 20
 	MaxCoverBytes = 5 << 20
 
+	MaxThumbnailBytes = 5 << 20
+
 	// PresignTTL is how long a signed object URL stays valid.
 	PresignTTL = 15 * time.Minute
 )
 
 var (
-	ErrInvalidImage  = errors.New("cover must be a JPEG or PNG image")
-	ErrInvalidEpub   = errors.New("file must be an EPUB under 50 MB")
-	ErrNotConfigured = errors.New("object storage is not configured")
+	ErrInvalidImage = errors.New("cover must be a JPEG or PNG image")
+	ErrInvalidEpub  = errors.New("file must be an EPUB under 50 MB")
+
+	ErrInvalidThumbnail = errors.New("thumbnail must be a PNG, JPEG or WebP image close to 1.91:1")
+	ErrNotConfigured    = errors.New("object storage is not configured")
 )
 
 // coverExtensions maps an accepted image content type to the key extension.
@@ -170,6 +175,71 @@ func coverKey(prefix string, id int64, contentType string) (string, error) {
 		return "", ErrInvalidImage
 	}
 	return fmt.Sprintf("%s/%d/cover%s", prefix, id, ext), nil
+}
+
+// thumbnailExtensions adds WebP, which game screenshots are commonly saved as.
+var thumbnailExtensions = map[string]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/webp": ".webp",
+}
+
+const (
+	// A card is 1.91:1. Anything outside this band would be cropped to nonsense, so
+	// the size is free but the shape is not.
+	thumbnailMinRatioPct = 170
+	thumbnailMaxRatioPct = 210
+)
+
+// ActivityThumbnailKey names one uploaded thumbnail. Every upload gets its own token so
+// replacing a thumbnail never overwrites the object the database still points at.
+func ActivityThumbnailKey(activityID int64, contentType, token string) (string, error) {
+	ext, ok := thumbnailExtensions[normalizeContentType(contentType)]
+	if !ok {
+		return "", ErrInvalidThumbnail
+	}
+	if token == "" {
+		return "", ErrInvalidThumbnail
+	}
+	return fmt.Sprintf("activities/%d/thumbnail-%s%s", activityID, token, ext), nil
+}
+
+func ValidateThumbnail(contentType string, size int64) error {
+	if _, ok := thumbnailExtensions[normalizeContentType(contentType)]; !ok {
+		return ErrInvalidThumbnail
+	}
+	if size <= 0 || size > MaxThumbnailBytes {
+		return ErrInvalidThumbnail
+	}
+	return nil
+}
+
+var thumbnailFormats = map[string]string{
+	"image/jpeg": "jpeg",
+	"image/png":  "png",
+	"image/webp": "webp",
+}
+
+// ValidateThumbnailImage decodes the header, requires the decoded format to match the
+// declared type and requires a landscape 1.7-2.1 ratio.
+func ValidateThumbnailImage(r io.ReaderAt, size int64, contentType string) error {
+	cfg, format, err := image.DecodeConfig(io.NewSectionReader(r, 0, size))
+	if err != nil {
+		return ErrInvalidThumbnail
+	}
+	if want, ok := thumbnailFormats[normalizeContentType(contentType)]; !ok || want != format {
+		return ErrInvalidThumbnail
+	}
+	if cfg.Width < 64 || cfg.Height < 64 {
+		return ErrInvalidThumbnail
+	}
+	if cfg.Width > maxCoverEdge || cfg.Height > maxCoverEdge || cfg.Width*cfg.Height > maxCoverPixels {
+		return ErrInvalidThumbnail
+	}
+	if cfg.Width*100 < cfg.Height*thumbnailMinRatioPct || cfg.Width*100 > cfg.Height*thumbnailMaxRatioPct {
+		return ErrInvalidThumbnail
+	}
+	return nil
 }
 
 // ValidateEPUB checks what the browser claims about the file; the caller still has
