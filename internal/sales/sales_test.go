@@ -304,6 +304,90 @@ func TestTrendIsTwelveVietnamWeeks(t *testing.T) {
 	}
 }
 
+// TestDailyTrendIsSevenVietnamDays pins the dashboard chart contract: seven calendar days in
+// Vietnam time ending today, each sale in its own day, other teachers and unpaid orders out,
+// and a period cut-off that hides the money from the totals without emptying the chart.
+func TestDailyTrendIsSevenVietnamDays(t *testing.T) {
+	pool := dbtest.Migrated(t)
+	svc := sales.New(pool)
+
+	teacher := insertUser(t, pool, "sales-days@example.com", "teacher")
+	otherTeacher := insertUser(t, pool, "sales-days-other@example.com", "teacher")
+	buyer := insertUser(t, pool, "sales-days-buyer@example.com", "parent")
+	book := insertBook(t, pool, teacher, "days-book", 50000)
+	foreignBook := insertBook(t, pool, otherTeacher, "days-foreign", 50000)
+
+	// A fixed past day keeps the test deterministic: the chart always ends on this date, so the
+	// result never depends on the clock the test happens to run at.
+	vn := time.FixedZone("ICT", 7*60*60)
+	day := time.Date(2026, 1, 15, 0, 0, 0, 0, vn)
+	noon := day.Add(12 * time.Hour)
+
+	// 00:10 on the day is still the previous day in UTC: a UTC-bucketed chart files it wrong.
+	insertPaidOrderAt(t, pool, buyer, book, 50000, day.Add(10*time.Minute))
+	// 23:50 the day before belongs to the previous bar and is still inside the window.
+	insertPaidOrderAt(t, pool, buyer, book, 30000, day.Add(-10*time.Minute))
+	// Eight days back: real money, but outside the seven-day window.
+	insertPaidOrderAt(t, pool, buyer, book, 90000, day.AddDate(0, 0, -8))
+	// Someone else's sale must never enter this teacher's chart.
+	insertPaidOrderAt(t, pool, buyer, foreignBook, 70000, day.Add(time.Hour))
+	// An abandoned checkout can carry a paid_at too: the status filter, not the timestamp,
+	// has to keep its money out of the chart.
+	if _, err := pool.ExecContext(t.Context(),
+		`INSERT INTO orders (buyer_id, book_id, amount_vnd, status, vnpay_txn_ref, paid_at)
+		 VALUES ($1, $2, 80000, 'pending', 'txn-sales-days-dated-pending', $3)`,
+		buyer, book, day.Add(2*time.Hour)); err != nil {
+		t.Fatalf("insert dated pending order: %v", err)
+	}
+
+	summary, err := svc.Summary(t.Context(), teacher, nil, noon)
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+
+	if len(summary.Days) != 7 {
+		t.Fatalf("days = %d buckets, want 7", len(summary.Days))
+	}
+	last := summary.Days[len(summary.Days)-1]
+	if last.Date.Format("2006-01-02") != day.Format("2006-01-02") {
+		t.Errorf("last bucket = %s, want the fixed day %s",
+			last.Date.Format("2006-01-02"), day.Format("2006-01-02"))
+	}
+	if last.RevenueVND != 50000 {
+		t.Errorf("today = %d, want the 00:10 sale", last.RevenueVND)
+	}
+	if prev := summary.Days[len(summary.Days)-2]; prev.RevenueVND != 30000 {
+		t.Errorf("yesterday = %d, want the 23:50 sale", prev.RevenueVND)
+	}
+
+	var dailyTotal int64
+	for _, day := range summary.Days {
+		dailyTotal += day.RevenueVND
+	}
+	if dailyTotal != 80000 {
+		t.Errorf("daily total = %d, want 80000: the 8-day-old, foreign and unpaid orders stay out",
+			dailyTotal)
+	}
+
+	// The chart is a fixed window: cutting the period after both sales removes them from the
+	// money totals but leaves the last seven days intact.
+	since := noon
+	recent, err := svc.Summary(t.Context(), teacher, &since, noon)
+	if err != nil {
+		t.Fatalf("summary since now: %v", err)
+	}
+	if recent.RevenueVND != 0 {
+		t.Errorf("period revenue = %d, want 0: the cut-off is after both sales", recent.RevenueVND)
+	}
+	var recentTotal int64
+	for _, day := range recent.Days {
+		recentTotal += day.RevenueVND
+	}
+	if recentTotal != 80000 {
+		t.Errorf("daily total with cut-off = %d, want the chart unchanged at 80000", recentTotal)
+	}
+}
+
 func TestSummaryRespectsSince(t *testing.T) {
 	pool := dbtest.Migrated(t)
 	svc := sales.New(pool)

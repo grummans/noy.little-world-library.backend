@@ -29,6 +29,12 @@ type salesWeekResponse struct {
 	RevenueVND int64  `json:"revenue_vnd"`
 }
 
+// date is a plain calendar day (YYYY-MM-DD): the daily chart needs no clock.
+type salesDayResponse struct {
+	Date       string `json:"date"`
+	RevenueVND int64  `json:"revenue_vnd"`
+}
+
 type salesOrderResponse struct {
 	PaidAt    time.Time `json:"paid_at"`
 	Title     string    `json:"title"`
@@ -40,6 +46,7 @@ type salesResponse struct {
 	Books   []salesItemResponse  `json:"books"`
 	Bundles []salesItemResponse  `json:"bundles"`
 	Trend   []salesWeekResponse  `json:"trend"`
+	Days    []salesDayResponse   `json:"days"`
 	Recent  []salesOrderResponse `json:"recent"`
 }
 
@@ -93,6 +100,7 @@ func (s *Server) handleSales(w http.ResponseWriter, r *http.Request) {
 		Books:   salesItems(summary.Books),
 		Bundles: salesItems(summary.Bundles),
 		Trend:   salesWeeks(summary.Trend),
+		Days:    salesDays(summary.Days),
 		Recent:  salesOrders(summary.Recent),
 	})
 }
@@ -105,6 +113,17 @@ func salesItems(items []sales.Item) []salesItemResponse {
 			Title:      item.Title,
 			Sold:       item.Sold,
 			RevenueVND: item.RevenueVND,
+		})
+	}
+	return resp
+}
+
+func salesDays(days []sales.Day) []salesDayResponse {
+	resp := make([]salesDayResponse, 0, len(days))
+	for _, day := range days {
+		resp = append(resp, salesDayResponse{
+			Date:       day.Date.Format("2006-01-02"),
+			RevenueVND: day.RevenueVND,
 		})
 	}
 	return resp
